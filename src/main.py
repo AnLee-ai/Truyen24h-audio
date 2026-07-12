@@ -1,0 +1,158 @@
+import argparse
+import sys
+import os
+import uvicorn
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.responses import HTMLResponse
+
+from src import config
+from src import database
+from src import writer
+from src import tts
+from src import audio
+from src import telegram_uploader
+
+# Initialize FastAPI App
+app = FastAPI(title="Truyện 24h Audio Engine", version="1.0.0")
+
+def run_chapter_pipeline(novel_id: str):
+    """Executes the full pipeline for writing a chapter and uploading audio."""
+    if not config.validate_config():
+        print("[ERROR] Configuration validation failed. Aborting pipeline.")
+        return
+        
+    try:
+        # 1. Write the chapter & update Story Bible
+        chapter = writer.write_next_chapter(novel_id)
+        chapter_id = chapter["id"]
+        chapter_num = chapter["chapter_number"]
+        chapter_title = chapter["title"]
+        chapter_content = chapter["content"]
+        
+        print(f"[INFO] Chapter {chapter_num} written successfully: '{chapter_title}'")
+        
+        # 2. Convert chapter text to raw speech audio & subtitles
+        raw_audio_path, srt_path = tts.generate_voice_and_subs(chapter_content, chapter_id)
+        
+        # 3. Mix speech audio with background music
+        final_audio_path = audio.mix_bgm_with_voice(raw_audio_path, chapter_id)
+        
+        # 4. Upload final audio and subtitles to Telegram Channel
+        caption_markdown = (
+            f"🎙️ *Truyện 24h Audio - Tập {chapter_num}*\n\n"
+            f"📖 *Chương {chapter_num}: {chapter_title}*\n\n"
+            f"Tác phẩm được viết tự động bằng AI, chỉnh sửa âm thanh chất lượng cao."
+        )
+        
+        success = telegram_uploader.send_audio_to_telegram(
+            audio_path=final_audio_path,
+            caption=caption_markdown,
+            title=f"Chương {chapter_num} - {chapter_title}",
+            srt_path=srt_path
+        )
+        
+        if success:
+            print(f"[INFO] Pipeline execution complete for Chapter {chapter_num}!")
+            # Update chapter status in DB to record completion
+            database.update_chapter_audio(chapter_id, "Uploaded to Telegram")
+        else:
+            print("[WARNING] Pipeline finished but Telegram upload failed.")
+            
+    except Exception as e:
+        print(f"[ERROR] Critical error in pipeline execution: {e}")
+
+# FastAPI endpoints
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """Simple status page for UptimeRobot / Cron-job.org pings."""
+    return """
+    <html>
+        <head>
+            <title>Truyện 24h Audio Engine</title>
+            <style>
+                body { font-family: sans-serif; background-color: #121212; color: #ffffff; text-align: center; padding-top: 100px; }
+                h1 { color: #00e676; }
+                .status { background: #1e1e1e; padding: 20px; border-radius: 8px; display: inline-block; }
+            </style>
+        </head>
+        <body>
+            <h1>Truyện 24h Audio</h1>
+            <div class="status">
+                <p>Trạng thái hệ thống: 🟢 Hoạt động 24/24</p>
+                <p>Sử dụng: edge-tts + Gemini 1.5 Flash + Supabase</p>
+            </div>
+        </body>
+    </html>
+    """
+
+@app.post("/run-pipeline")
+def trigger_pipeline(novel_id: str, background_tasks: BackgroundTasks):
+    """Triggers the chapter writing & audio publishing pipeline asynchronously."""
+    background_tasks.add_task(run_chapter_pipeline, novel_id)
+    return {"status": "accepted", "message": "Pipeline execution started in the background."}
+
+# CLI Argument Parser
+def main():
+    parser = argparse.ArgumentParser(description="Truyen 24h Audio CLI Orchestrator")
+    parser.add_argument("--action", choices=["init-novel", "run-pipeline", "export-audio", "serve"], 
+                        default="serve", help="Action to perform. Default is 'serve' web app.")
+    parser.add_argument("--title", help="Novel title for 'init-novel'")
+    parser.add_argument("--desc", help="Novel description for 'init-novel'")
+    parser.add_argument("--novel-id", help="Novel UUID for 'run-pipeline'")
+    parser.add_argument("--chapter-id", help="Chapter UUID for 'export-audio'")
+    
+    args = parser.parse_args()
+    
+    if args.action == "serve":
+        # Launch FastAPI server (Default port 7860 for Hugging Face)
+        port = int(os.getenv("PORT", 7860))
+        print(f"[INFO] Starting server on port {port}...")
+        uvicorn.run(app, host="0.0.0.0", port=port)
+        
+    elif args.action == "init-novel":
+        if not args.title:
+            print("[ERROR] --title is required for init-novel action.")
+            sys.exit(1)
+        config.validate_config()
+        novel = writer.init_novel_pipeline(args.title, args.desc or "")
+        print(f"SUCCESS: Novel initialized. ID: {novel['id']}")
+        
+    elif args.action == "run-pipeline":
+        novel_id = args.novel_id
+        if not novel_id:
+            print("[ERROR] --novel-id is required for run-pipeline action.")
+            sys.exit(1)
+        run_chapter_pipeline(novel_id)
+        
+    elif args.action == "export-audio":
+        chapter_id = getattr(args, "chapter_id", None)
+        if not chapter_id:
+            print("[ERROR] --chapter-id is required for export-audio action.")
+            sys.exit(1)
+        config.validate_config()
+        
+        # Fetch chapter content
+        client = database.get_client()
+        response = client.table("chapters").select("*").eq("id", chapter_id).execute()
+        if not response.data:
+            print(f"[ERROR] Chapter not found with ID {chapter_id}")
+            sys.exit(1)
+            
+        chapter = response.data[0]
+        raw_audio_path, srt_path = tts.generate_voice_and_subs(chapter["content"], chapter_id)
+        final_audio_path = audio.mix_bgm_with_voice(raw_audio_path, chapter_id)
+        
+        telegram_uploader.send_audio_to_telegram(
+            audio_path=final_audio_path,
+            caption=f"🎙️ Trích xuất âm thanh: {chapter['title']}",
+            title=chapter["title"],
+            srt_path=srt_path
+        )
+        print("SUCCESS: Audio exported and sent.")
+
+if __name__ == "__main__":
+    # If no arguments provided and not in terminal CLI context, default to serve
+    if len(sys.argv) == 1:
+        sys.argv.append("--action")
+        sys.argv.append("serve")
+    main()

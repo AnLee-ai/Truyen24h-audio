@@ -1,0 +1,353 @@
+import json
+import time
+import re
+import google.generativeai as genai
+from src import config
+from src import database
+from templates import prompts
+
+# Configure Gemini API
+if config.GEMINI_API_KEY:
+    genai.configure(api_key=config.GEMINI_API_KEY)
+
+def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
+    """Helper to call Gemini API with exponential backoff for rate limits."""
+    model_name = config.GEMINI_MODEL_WRITER
+    generation_config = {}
+    
+    if json_mode:
+        generation_config = {"response_mime_type": "application/json"}
+        
+    model = genai.GenerativeModel(model_name, generation_config=generation_config)
+    
+    for attempt in range(retries):
+        try:
+            response = model.generate_content(prompt)
+            if response.text:
+                return response.text.strip()
+            raise ValueError("Empty response from Gemini API.")
+        except Exception as e:
+            wait_time = (attempt + 1) * 10
+            print(f"[WARNING] Gemini call failed: {e}. Retrying in {wait_time}s...")
+            time.sleep(wait_time)
+            
+    raise RuntimeError("Max retries exceeded calling Gemini API.")
+
+def get_embedding(text: str) -> list:
+    """Generate vector embedding for semantic search using text-embedding-004."""
+    try:
+        result = genai.embed_content(
+            model=f"models/{config.GEMINI_MODEL_EMBED}",
+            content=text,
+            task_type="retrieval_document"
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"[ERROR] Failed to generate embedding: {e}")
+        # Return a dummy 1536-dim vector if it fails
+        return [0.0] * 1536
+
+# Novel Lifecycle Operations
+def init_novel_pipeline(title: str, description: str) -> dict:
+    """Initialize a novel: create Supabase record and generate global outline."""
+    print(f"[INFO] Initializing new novel: '{title}'...")
+    
+    # 1. Save novel metadata to Supabase
+    novel = database.init_novel(title, description)
+    novel_id = novel["id"]
+    print(f"[INFO] Created novel record in database. ID: {novel_id}")
+    
+    # 2. Generate Global Outline (JSON of Arcs)
+    prompt = prompts.OUTLINE_PROMPT.format(title=title, description=description)
+    outline_json = call_gemini(prompt, json_mode=True)
+    
+    try:
+        outline = json.loads(outline_json)
+        # Update novel description to store the structured outline
+        database.upsert_narrative_thread(
+            novel_id=novel_id,
+            thread_name="Global Outline",
+            description=json.dumps(outline, ensure_ascii=False)
+        )
+        print("[INFO] Global Outline generated and stored successfully.")
+    except Exception as e:
+        print(f"[ERROR] Failed to parse global outline JSON: {e}. Raw content: {outline_json}")
+        # Store as raw text if parsing fails
+        database.upsert_narrative_thread(
+            novel_id=novel_id,
+            thread_name="Global Outline",
+            description=outline_json
+        )
+        
+    return novel
+
+def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
+    """Generate chapter-by-chapter blueprints for a specific story arc."""
+    arc_num = arc.get("arc_number")
+    arc_title = arc.get("title")
+    start_ch = arc.get("start_chapter")
+    end_ch = arc.get("end_chapter")
+    
+    print(f"[INFO] Generating blueprints for Arc {arc_num}: '{arc_title}' (Chapters {start_ch} - {end_ch})...")
+    
+    # Fetch existing chapters to inform the arc planner of current status
+    existing_chapters = database.get_all_chapters(novel_id)
+    status_summary = f"Written {len(existing_chapters)} chapters."
+    if existing_chapters:
+        status_summary += f" Latest chapter was: {existing_chapters[-1]['title']}"
+        
+    prompt = prompts.ARC_PROMPT.format(
+        arc_number=arc_num,
+        arc_title=arc_title,
+        start_chapter=start_ch,
+        end_chapter=end_ch,
+        global_status=status_summary
+    )
+    
+    blueprints_json = call_gemini(prompt, json_mode=True)
+    
+    try:
+        blueprints = json.loads(blueprints_json)
+        # Pre-insert chapters with blueprints
+        inserted_chapters = []
+        for ch_data in blueprints:
+            ch_num = ch_data.get("chapter_number")
+            ch_title = ch_data.get("chapter_title")
+            blueprint_text = ch_data.get("blueprint")
+            
+            # Save chapter blueprint as initial content placeholder
+            ch_record = database.create_chapter(
+                novel_id=novel_id,
+                chapter_number=ch_num,
+                title=ch_title,
+                content=f"BLUEPRINT: {blueprint_text}\nCHARACTERS: {', '.join(ch_data.get('characters_present', []))}"
+            )
+            inserted_chapters.append(ch_record)
+            
+        print(f"[INFO] Created {len(inserted_chapters)} chapter blueprints in DB.")
+        return inserted_chapters
+    except Exception as e:
+        print(f"[ERROR] Failed to generate/parse blueprints for Arc {arc_num}: {e}")
+        return []
+
+def get_current_arc(novel_id: str, chapter_number: int) -> dict:
+    """Find which arc the chapter belongs to based on the stored Global Outline."""
+    threads = database.get_narrative_threads(novel_id)
+    outline_thread = next((t for t in threads if t["thread_name"] == "Global Outline"), None)
+    if not outline_thread:
+        return {}
+        
+    try:
+        outline = json.loads(outline_thread["description"])
+        for arc in outline.get("arcs", []):
+            if arc["start_chapter"] <= chapter_number <= arc["end_chapter"]:
+                return arc
+    except Exception as e:
+        print(f"[ERROR] Failed to load outline JSON: {e}")
+        
+    # Default fallback arc definition
+    return {
+        "arc_number": 1,
+        "title": "Default Arc",
+        "start_chapter": 1,
+        "end_chapter": 25
+    }
+
+def write_next_chapter(novel_id: str) -> dict:
+    """Orchestrate the generation and database sync of the next chapter."""
+    # 1. Determine next chapter number
+    latest_ch = database.get_latest_chapter(novel_id)
+    
+    next_ch_number = 1
+    # Check if latest chapter is already written (not just a blueprint placeholder)
+    if latest_ch and not latest_ch["content"].startswith("BLUEPRINT:"):
+        next_ch_number = latest_ch["chapter_number"] + 1
+        
+    print(f"[INFO] Initiating writing process for Chapter {next_ch_number}...")
+    
+    # 2. Get current arc and verify if chapter blueprints need to be generated
+    current_arc = get_current_arc(novel_id, next_ch_number)
+    
+    # Fetch the chapter record for next_ch_number
+    all_chapters = database.get_all_chapters(novel_id)
+    chapter_record = next((c for c in all_chapters if c["chapter_number"] == next_ch_number), None)
+    
+    # If chapter record doesn't exist, we might have crossed into a new Arc
+    if not chapter_record:
+        # Generate blueprints for the new arc
+        generate_arc_blueprints(novel_id, current_arc)
+        all_chapters = database.get_all_chapters(novel_id)
+        chapter_record = next((c for c in all_chapters if c["chapter_number"] == next_ch_number), None)
+        
+    if not chapter_record:
+        raise ValueError(f"Could not initialize blueprint for chapter {next_ch_number}")
+        
+    blueprint_text = chapter_record["content"]
+    
+    # 3. Retrieve database entities for Context Injection
+    # A. Characters
+    chars = database.get_characters(novel_id)
+    # Filter protagonist (assume first character is protagonist or name contains 'Jack'/'Protagonist')
+    protagonist = next((c for c in chars if c.get("failure_flag") is not None), None)
+    if not protagonist and chars:
+        protagonist = chars[0]
+        
+    protagonist_name = protagonist["name"] if protagonist else "Jack"
+    protagonist_power = protagonist["power_tier"] if protagonist else "Ordinary"
+    protagonist_stats = json.dumps(protagonist["combat_stats"]) if protagonist else "{}"
+    failure_flag = protagonist["failure_flag"] if protagonist else False
+    last_breakthrough_ch = protagonist["last_breakthrough_chapter"] if protagonist else 0
+    
+    # B. World Lore
+    lores = database.get_world_lore(novel_id)
+    world_lore_text = "\n".join([f"- {l['keyword']}: {l['description']}" for l in lores])
+    
+    # C. History Vector Search (Semantic RAG)
+    query_embed = get_embedding(blueprint_text)
+    semantic_history = database.search_episodes(novel_id, query_embed, limit=5)
+    history_text = "\n".join([f"- Chapter {h['chapter_id']}: {h['event_summary']}" for h in semantic_history])
+    
+    # D. Working Memory (Last 2 written chapters content)
+    previous_chapters = [c for c in all_chapters if c["chapter_number"] < next_ch_number and not c["content"].startswith("BLUEPRINT:")]
+    working_memory_text = ""
+    for ch in previous_chapters[-2:]:
+        working_memory_text += f"\n--- Chapter {ch['chapter_number']}: {ch['title']} ---\n{ch['content'][:1500]}...\n"
+        
+    # 4. Generate Chapter Content with Editor Review loop
+    attempt = 0
+    max_attempts = 3
+    final_content = ""
+    
+    prompt = prompts.WRITING_PROMPT.format(
+        chapter_number=next_ch_number,
+        chapter_title=chapter_record["title"],
+        title="Truyện 24h Audio",
+        blueprint=blueprint_text,
+        world_lore=world_lore_text,
+        characters=json.dumps(chars, ensure_ascii=False, indent=2),
+        history=history_text,
+        previous_content=working_memory_text,
+        protagonist_name=protagonist_name,
+        protagonist_power=protagonist_power,
+        protagonist_stats=protagonist_stats,
+        failure_flag=str(failure_flag)
+    )
+    
+    while attempt < max_attempts:
+        attempt += 1
+        print(f"[INFO] Writing chapter draft (Attempt {attempt}/{max_attempts})...")
+        final_content = call_gemini(prompt)
+        
+        # Editor Review
+        review_prompt = prompts.REVIEW_PROMPT.format(
+            chapter_number=next_ch_number,
+            chapter_title=chapter_record["title"],
+            chapter_content=final_content,
+            world_lore=world_lore_text,
+            characters=json.dumps(chars, ensure_ascii=False, indent=2),
+            failure_flag=str(failure_flag),
+            last_breakthrough_chapter=last_breakthrough_ch
+        )
+        
+        review_json = call_gemini(review_prompt, json_mode=True)
+        try:
+            review = json.loads(review_json)
+            if review.get("pass_review") or attempt == max_attempts:
+                print(f"[INFO] Chapter passed review with score {review.get('score', 8)}/10.")
+                break
+            else:
+                print(f"[WARNING] Review failed: {review.get('feedback')}. Re-writing...")
+                # Inject feedback into prompt for next try
+                prompt = prompt + f"\n\nPrevious Editor Feedback (MUST address this in rewrite): {review.get('feedback')}"
+        except Exception as e:
+            print(f"[WARNING] Failed to parse editor review: {e}. Skipping review loop.")
+            break
+            
+    # 5. Save written chapter to Supabase
+    # Update content of chapter_record
+    client = database.get_client()
+    response = client.table("chapters")\
+        .update({"content": final_content})\
+        .eq("id", chapter_record["id"])\
+        .execute()
+    updated_chapter = response.data[0] if response.data else {}
+    
+    # 6. Post-writing Database Sync (Extract Entities & Update Story Bible)
+    sync_story_bible(novel_id, updated_chapter, chars)
+    
+    return updated_chapter
+
+def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
+    """Parse the written chapter to extract status updates and write them to Supabase."""
+    print("[INFO] Syncing Story Bible and updating character stats...")
+    
+    prompt = prompts.EXTRACT_ENTITIES_PROMPT.format(
+        chapter_content=chapter["content"],
+        current_characters=json.dumps(current_chars, ensure_ascii=False)
+    )
+    
+    extract_json = call_gemini(prompt, json_mode=True)
+    try:
+        data = json.loads(extract_json)
+        
+        # 1. Update Character states (stats, failure flag, breakthrough)
+        for char_up in data.get("character_updates", []):
+            name = char_up["name"]
+            # Fetch existing to avoid wiping missing fields
+            exist = database.get_character_by_name(novel_id, name)
+            
+            # Decide if breakthrough resetting the failure_flag is needed
+            new_failure_flag = char_up.get("failure_flag", exist.get("failure_flag", False) if exist else False)
+            last_bt = exist.get("last_breakthrough_chapter", 0) if exist else 0
+            
+            # If protagonist had a breakthrough, reset failure_flag and record chapter number
+            if char_up.get("breakthrough_written"):
+                new_failure_flag = False
+                last_bt = chapter["chapter_number"]
+                print(f"[INFO] Protagonist breakthrough recorded in Chapter {last_bt}! Resetting failure_flag.")
+                
+            database.upsert_character(
+                novel_id=novel_id,
+                name=name,
+                description=char_up.get("description", exist.get("description", "") if exist else ""),
+                power_tier=char_up.get("power_tier", exist.get("power_tier", "Ordinary") if exist else "Ordinary"),
+                combat_stats=char_up.get("combat_stats", exist.get("combat_stats", {}) if exist else {}),
+                relationships=char_up.get("relationships", exist.get("relationships", {}) if exist else {}),
+                failure_flag=new_failure_flag,
+                last_breakthrough_chapter=last_bt
+            )
+            
+        # 2. Insert new world lores
+        for lore in data.get("new_lore", []):
+            database.upsert_world_lore(
+                novel_id=novel_id,
+                keyword=lore["keyword"],
+                description=lore["description"]
+            )
+            print(f"[INFO] New lore added: {lore['keyword']}")
+            
+        # 3. Insert new narrative threads
+        for thread in data.get("new_threads", []):
+            database.upsert_narrative_thread(
+                novel_id=novel_id,
+                thread_name=thread["thread_name"],
+                description=thread["description"],
+                status="open"
+            )
+            print(f"[INFO] New narrative thread added: {thread['thread_name']}")
+            
+        # 4. Generate Episodic Summary and Embedding
+        # Create event list
+        events_list = [c.get("event_summary", "") for c in data.get("character_updates", []) if c.get("event_summary")]
+        chapter_events = " ".join(events_list) if events_list else f"Chapter {chapter['chapter_number']}: {chapter['title']}"
+        
+        embed_vector = get_embedding(chapter["content"])
+        database.create_episode_summary(
+            chapter_id=chapter["id"],
+            event_summary=chapter_events,
+            embedding=embed_vector
+        )
+        print("[INFO] Episodic summary and Vector embedding saved.")
+        
+    except Exception as e:
+        print(f"[ERROR] Story bible sync failed: {e}. Raw JSON: {extract_json}")
