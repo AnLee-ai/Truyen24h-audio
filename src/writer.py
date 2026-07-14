@@ -336,7 +336,10 @@ def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
             exist = database.get_character_by_name(novel_id, name)
             
             # Decide if breakthrough resetting the failure_flag is needed
-            new_failure_flag = char_up.get("failure_flag", exist.get("failure_flag", False) if exist else False)
+            new_failure_flag = char_up.get("failure_flag")
+            if new_failure_flag is None:
+                new_failure_flag = exist.get("failure_flag", False) if exist else False
+                
             last_bt = exist.get("last_breakthrough_chapter", 0) if exist else 0
             
             # If protagonist had a breakthrough, reset failure_flag and record chapter number
@@ -345,13 +348,19 @@ def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
                 last_bt = chapter["chapter_number"]
                 print(f"[INFO] Protagonist breakthrough recorded in Chapter {last_bt}! Resetting failure_flag.")
                 
+            # Safely resolve schema fields to prevent null violations
+            description = char_up.get("description") or (exist.get("description", "") if exist else "")
+            power_tier = char_up.get("power_tier") or (exist.get("power_tier", "Ordinary") if exist else "Ordinary")
+            combat_stats = char_up.get("combat_stats") or (exist.get("combat_stats", {}) if exist else {})
+            relationships = char_up.get("relationships") or (exist.get("relationships", {}) if exist else {})
+            
             database.upsert_character(
                 novel_id=novel_id,
                 name=name,
-                description=char_up.get("description", exist.get("description", "") if exist else ""),
-                power_tier=char_up.get("power_tier", exist.get("power_tier", "Ordinary") if exist else "Ordinary"),
-                combat_stats=char_up.get("combat_stats", exist.get("combat_stats", {}) if exist else {}),
-                relationships=char_up.get("relationships", exist.get("relationships", {}) if exist else {}),
+                description=description,
+                power_tier=power_tier,
+                combat_stats=combat_stats,
+                relationships=relationships,
                 failure_flag=new_failure_flag,
                 last_breakthrough_chapter=last_bt
             )
