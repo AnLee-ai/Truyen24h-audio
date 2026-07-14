@@ -10,6 +10,14 @@ from templates import prompts
 if config.GEMINI_API_KEY:
     genai.configure(api_key=config.GEMINI_API_KEY)
 
+def safe_loads(text: str):
+    """Safely parse JSON string, stripping markdown code block wrappers if present."""
+    cleaned = text.strip()
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
+    if match:
+        cleaned = match.group(1).strip()
+    return json.loads(cleaned)
+
 def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
     """Helper to call Gemini API with exponential backoff for rate limits."""
     model_name = config.GEMINI_MODEL_WRITER
@@ -62,7 +70,7 @@ def init_novel_pipeline(title: str, description: str) -> dict:
     outline_json = call_gemini(prompt, json_mode=True)
     
     try:
-        outline = json.loads(outline_json)
+        outline = safe_loads(outline_json)
         # Update novel description to store the structured outline
         database.upsert_narrative_thread(
             novel_id=novel_id,
@@ -107,7 +115,7 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
     blueprints_json = call_gemini(prompt, json_mode=True)
     
     try:
-        blueprints = json.loads(blueprints_json)
+        blueprints = safe_loads(blueprints_json)
         # Pre-insert chapters with blueprints
         inserted_chapters = []
         for ch_data in blueprints:
@@ -251,7 +259,7 @@ def write_next_chapter(novel_id: str) -> dict:
         
         review_json = call_gemini(review_prompt, json_mode=True)
         try:
-            review = json.loads(review_json)
+            review = safe_loads(review_json)
             if review.get("pass_review") or attempt == max_attempts:
                 print(f"[INFO] Chapter passed review with score {review.get('score', 8)}/10.")
                 break
@@ -288,7 +296,7 @@ def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
     
     extract_json = call_gemini(prompt, json_mode=True)
     try:
-        data = json.loads(extract_json)
+        data = safe_loads(extract_json)
         
         # 1. Update Character states (stats, failure flag, breakthrough)
         for char_up in data.get("character_updates", []):
