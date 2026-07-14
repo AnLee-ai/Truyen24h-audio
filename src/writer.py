@@ -35,7 +35,7 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
         if json_mode:
             data["response_format"] = {"type": "json_object"}
             
-        for attempt in range(retries):
+        for attempt in range(retries + 2):  # Increase retries for Groq to handle TPM limits
             try:
                 response = requests.post(url, json=data, headers=headers, timeout=120)
                 if response.status_code == 200:
@@ -43,10 +43,21 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
                     content = resp_json["choices"][0]["message"]["content"]
                     if content:
                         return content.strip()
+                
+                if response.status_code == 429:
+                    wait_time = 20 + (attempt * 10)
+                    print(f"[WARNING] Groq rate limit (429) hit. Sleeping {wait_time}s to reset TPM...")
+                    time.sleep(wait_time)
+                    continue
+                    
                 raise RuntimeError(f"Groq API returned status {response.status_code}: {response.text}")
             except Exception as e:
-                wait_time = (attempt + 1) * 5
-                print(f"[WARNING] Groq call failed: {e}. Retrying in {wait_time}s...")
+                if "429" in str(e):
+                    wait_time = 20 + (attempt * 10)
+                    print(f"[WARNING] Groq rate limit hit: {e}. Sleeping {wait_time}s...")
+                else:
+                    wait_time = (attempt + 1) * 5
+                    print(f"[WARNING] Groq call failed: {e}. Retrying in {wait_time}s...")
                 time.sleep(wait_time)
         raise RuntimeError("Max retries exceeded calling Groq API.")
 
