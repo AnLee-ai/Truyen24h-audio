@@ -19,6 +19,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Environment variables
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -27,7 +28,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Model configurations
 # Using gemini-flash-latest as the primary fast and free model
 GEMINI_MODEL_WRITER = os.getenv("GEMINI_MODEL_WRITER", "gemini-flash-latest")
-GEMINI_MODEL_EMBED = os.getenv("GEMINI_MODEL_EMBED", "text-embedding-004")
+GEMINI_MODEL_EMBED = os.getenv("GEMINI_MODEL_EMBED", "gemini-embedding-001")
+GROQ_MODEL_WRITER = os.getenv("GROQ_MODEL_WRITER", "llama-3.3-70b-versatile")
 
 # TTS configurations
 DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "vi-VN-HoaiMyNeural")  # Alternative: vi-VN-NamMinhNeural
