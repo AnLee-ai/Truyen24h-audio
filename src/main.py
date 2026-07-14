@@ -12,6 +12,17 @@ from src import tts
 from src import audio
 from src import telegram_uploader
 
+def safe_print(msg: str):
+    """Safely print message preventing UnicodeEncodeError on Windows terminals."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        try:
+            encoding = sys.stdout.encoding or 'utf-8'
+            print(msg.encode(encoding, errors='replace').decode(encoding))
+        except Exception:
+            print(msg.encode('ascii', errors='replace').decode('ascii'))
+
 # Initialize FastAPI App
 app = FastAPI(title="Truyện 24h Audio Engine", version="1.0.0")
 
@@ -110,12 +121,35 @@ def main():
         uvicorn.run(app, host="0.0.0.0", port=port)
         
     elif args.action == "init-novel":
-        if not args.title:
-            print("[ERROR] --title is required for init-novel action.")
+        if not config.validate_config():
             sys.exit(1)
-        config.validate_config()
-        novel = writer.init_novel_pipeline(args.title, args.desc or "")
-        print(f"SUCCESS: Novel initialized. ID: {novel['id']}")
+        title = args.title
+        desc = args.desc or ""
+        
+        if not title:
+            safe_print("[INFO] No title provided. Brainstorming novel concept using Gemini...")
+            try:
+                import json
+                import re
+                from templates import prompts
+                brainstorm_json = writer.call_gemini(prompts.BRAINSTORM_PROMPT, json_mode=True)
+                cleaned_json = brainstorm_json.strip()
+                match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_json)
+                if match:
+                    cleaned_json = match.group(1).strip()
+                brainstorm_data = json.loads(cleaned_json)
+                title = brainstorm_data.get("title", "Huyen Thoai Troi Day")
+                desc = brainstorm_data.get("description", "Mot cau chuyen gia tuong ky thu.")
+                safe_print(f"[INFO] Generated Title: '{title}'")
+                safe_print(f"[INFO] Generated Description: '{desc[:150]}...'")
+            except Exception as e:
+                safe_print(f"[ERROR] Failed to brainstorm novel: {e}")
+                title = "Huyen Thoai Aetheria"
+                desc = "Cau chuyen gia tuong day loi cuon."
+                safe_print(f"[INFO] Using fallback Title: '{title}'")
+                
+        novel = writer.init_novel_pipeline(title, desc)
+        safe_print(f"SUCCESS: Novel initialized. ID: {novel['id']}")
         
     elif args.action == "run-pipeline":
         novel_id = args.novel_id
@@ -129,7 +163,8 @@ def main():
         if not chapter_id:
             print("[ERROR] --chapter-id is required for export-audio action.")
             sys.exit(1)
-        config.validate_config()
+        if not config.validate_config():
+            sys.exit(1)
         
         # Fetch chapter content
         client = database.get_client()
