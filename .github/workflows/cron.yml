@@ -2,8 +2,8 @@ name: Scheduled Chapter Writer
 
 on:
   schedule:
-    - cron: '0 */3 * * *'  # Chạy tự động mỗi 3 tiếng
-  workflow_dispatch:      # Nút bấm chạy thủ công
+    - cron: '0 */3 * * *'  # Runs every 3 hours
+  workflow_dispatch:      # Allows manual trigger từ giao diện GitHub
 
 jobs:
   run-pipeline:
@@ -29,9 +29,10 @@ jobs:
       - name: Run Writing & Audio Pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python -m src.main --action run-pipeline --novel-id ${{ secrets.NOVEL_ID }}
+          python -u -m src.main --action run-pipeline --novel-id ${{ secrets.NOVEL_ID }}
