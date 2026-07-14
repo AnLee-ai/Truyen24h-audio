@@ -19,7 +19,38 @@ def safe_loads(text: str):
     return json.loads(cleaned)
 
 def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
-    """Helper to call Gemini API with exponential backoff for rate limits."""
+    """Helper to call LLM (Groq if key configured, otherwise Gemini API) with backoff."""
+    if config.GROQ_API_KEY:
+        import requests
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {config.GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": config.GROQ_MODEL_WRITER,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7
+        }
+        if json_mode:
+            data["response_format"] = {"type": "json_object"}
+            
+        for attempt in range(retries):
+            try:
+                response = requests.post(url, json=data, headers=headers, timeout=120)
+                if response.status_code == 200:
+                    resp_json = response.json()
+                    content = resp_json["choices"][0]["message"]["content"]
+                    if content:
+                        return content.strip()
+                raise RuntimeError(f"Groq API returned status {response.status_code}: {response.text}")
+            except Exception as e:
+                wait_time = (attempt + 1) * 5
+                print(f"[WARNING] Groq call failed: {e}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+        raise RuntimeError("Max retries exceeded calling Groq API.")
+
+    # Fallback to Gemini API
     model_name = config.GEMINI_MODEL_WRITER
     generation_config = {}
     
