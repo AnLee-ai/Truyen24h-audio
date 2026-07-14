@@ -80,7 +80,13 @@ def get_embedding(text: str) -> list:
             content=text,
             task_type="retrieval_document"
         )
-        return result['embedding']
+        emb = result['embedding']
+        # Force exactly 1536 dimensions to match database schema
+        if len(emb) > 1536:
+            return emb[:1536]
+        elif len(emb) < 1536:
+            return emb + [0.0] * (1536 - len(emb))
+        return emb
     except Exception as e:
         print(f"[ERROR] Failed to generate embedding: {e}")
         # Return a dummy 1536-dim vector if it fails
