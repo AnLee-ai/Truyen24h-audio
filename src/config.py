@@ -25,8 +25,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Model configurations
-# Using gemini-1.5-flash as the primary fast and free model
-GEMINI_MODEL_WRITER = os.getenv("GEMINI_MODEL_WRITER", "gemini-1.5-flash")
+# Using gemini-flash-latest as the primary fast and free model
+GEMINI_MODEL_WRITER = os.getenv("GEMINI_MODEL_WRITER", "gemini-flash-latest")
 GEMINI_MODEL_EMBED = os.getenv("GEMINI_MODEL_EMBED", "text-embedding-004")
 
 # TTS configurations
