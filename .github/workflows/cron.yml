@@ -2,7 +2,8 @@ name: Scheduled Chapter Writer
 
 on:
   schedule:
-    - cron: '0 */3 * * *'  # Runs every 3 hours
+    - cron: '0 */3 * * *'                      # Chạy vào các khung giờ chẵn: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00
+    - cron: '30 1,4,7,10,13,16,19,22 * * *'    # Chạy xen kẽ lệch 1h30: 01:30, 04:30, 07:30, 10:30, 13:30, 16:30, 19:30, 22:30
   workflow_dispatch:      # Allows manual trigger từ giao diện GitHub
 
 jobs:
