@@ -153,10 +153,27 @@ def main():
         
     elif args.action == "run-pipeline":
         novel_id = args.novel_id
-        if not novel_id:
-            print("[ERROR] --novel-id is required for run-pipeline action.")
-            sys.exit(1)
-        run_chapter_pipeline(novel_id)
+        if novel_id:
+            novel_id = novel_id.strip().strip("'\"").strip()
+        if not novel_id or novel_id.lower() == "all":
+            if not config.validate_config():
+                sys.exit(1)
+            active_novels = database.get_active_novels()
+            if not active_novels:
+                safe_print("[INFO] No active novels found in database with status 'writing'.")
+                sys.exit(0)
+            
+            safe_print(f"[INFO] Found {len(active_novels)} active novels. Executing pipelines...")
+            for novel in active_novels:
+                safe_print(f"\n=========================================")
+                safe_print(f"EXECUTING PIPELINE FOR: {novel['title']} (ID: {novel['id']})")
+                safe_print(f"=========================================")
+                try:
+                    run_chapter_pipeline(novel['id'])
+                except Exception as e:
+                    safe_print(f"[ERROR] Failed running pipeline for {novel['title']}: {e}")
+        else:
+            run_chapter_pipeline(novel_id)
         
     elif args.action == "export-audio":
         chapter_id = getattr(args, "chapter_id", None)
