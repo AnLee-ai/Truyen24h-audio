@@ -28,7 +28,9 @@ Ensure the JSON is strictly formatted and valid. Do not wrap in markdown quotes.
 """
 
 ARC_PROMPT = """
-You are a detailed storyteller. Develop a chapter-by-chapter blueprint outline for Arc {arc_number}: {arc_title}.
+You are a detailed storyteller. Develop a chapter-by-chapter blueprint outline for Arc {arc_number}: {arc_title} of the novel "{novel_title}".
+Novel Description: {novel_description}
+Arc Summary: {arc_summary}
 This arc spans chapters {start_chapter} to {end_chapter}.
 Global story status: {global_status}
 
