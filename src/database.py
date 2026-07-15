@@ -29,6 +29,12 @@ def get_novel(novel_id: str) -> dict:
     response = client.table("novels").select("*").eq("id", novel_id).execute()
     return response.data[0] if response.data else {}
 
+def get_active_novels() -> list:
+    """Fetch all active novels currently in writing status."""
+    client = get_client()
+    response = client.table("novels").select("*").eq("status", "writing").execute()
+    return response.data if response.data else []
+
 # Chapter Operations
 def get_latest_chapter(novel_id: str) -> dict:
     """Fetch the latest chapter of a novel."""
