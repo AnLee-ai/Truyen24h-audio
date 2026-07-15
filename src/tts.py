@@ -67,16 +67,6 @@ def get_proper_noun_words(chapter_id: str) -> list:
     unique_words.sort(key=len, reverse=True)
     return unique_words
 
-def get_full_voice_name(voice: str) -> str:
-    """Map short voice name (e.g. vi-VN-HoaiMyNeural) to Microsoft full voice name."""
-    if voice.startswith("Microsoft Server Speech"):
-        return voice
-    if len(voice) >= 7 and voice[5] == '-':
-        lang = voice[:5]
-        name = voice[6:]
-        return f"Microsoft Server Speech Text to Speech Voice ({lang}, {name})"
-    return voice
-
 def text_to_ssml(text: str, chapter_id: str, voice: str, rate: str, pitch: str) -> str:
     """Wrap text in SSML and slow down English proper nouns."""
     # Escape XML special characters
@@ -95,10 +85,9 @@ def text_to_ssml(text: str, chapter_id: str, voice: str, rate: str, pitch: str) 
     except Exception as e:
         print(f"[WARNING] Failed to format SSML: {e}")
         
-    full_voice = get_full_voice_name(voice)
     return (
         f"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='vi-VN'>"
-        f"<voice name='{full_voice}'>"
+        f"<voice name='{voice}'>"
         f"<prosody rate='{rate}' pitch='{pitch}'>"
         f"{escaped_text}"
         f"</prosody>"
