@@ -41,7 +41,7 @@ def send_audio_to_telegram(audio_path: str, caption: str, title: str = None, srt
             if title:
                 data['title'] = title
                 
-            response = requests.post(url, data=data, files=files, timeout=60)
+            response = requests.post(url, data=data, files=files, timeout=300)
             
         if response.status_code == 200:
             print("[INFO] Audio uploaded successfully to Telegram.")
@@ -73,7 +73,7 @@ def send_document_to_telegram(doc_path: str, caption: str) -> bool:
                 'caption': caption,
                 'parse_mode': 'Markdown'
             }
-            response = requests.post(url, data=data, files=files, timeout=30)
+            response = requests.post(url, data=data, files=files, timeout=60)
             
         return response.status_code == 200
     except Exception as e:
