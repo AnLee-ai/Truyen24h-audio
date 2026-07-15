@@ -12,16 +12,22 @@ from src import tts
 from src import audio
 from src import telegram_uploader
 
-def safe_print(msg: str):
+def safe_print(*args, **kwargs):
     """Safely print message preventing UnicodeEncodeError on Windows terminals."""
+    msg = " ".join(str(arg) for arg in args)
     try:
-        print(msg)
+        sys.stdout.write(msg + kwargs.get("end", "\n"))
+        sys.stdout.flush()
     except UnicodeEncodeError:
         try:
             encoding = sys.stdout.encoding or 'utf-8'
-            print(msg.encode(encoding, errors='replace').decode(encoding))
+            sys.stdout.write(msg.encode(encoding, errors='replace').decode(encoding) + kwargs.get("end", "\n"))
+            sys.stdout.flush()
         except Exception:
-            print(msg.encode('ascii', errors='replace').decode('ascii'))
+            sys.stdout.write(msg.encode('ascii', errors='replace').decode('ascii') + kwargs.get("end", "\n"))
+            sys.stdout.flush()
+
+print = safe_print
 
 # Initialize FastAPI App
 app = FastAPI(title="Truyện 24h Audio Engine", version="1.0.0")
