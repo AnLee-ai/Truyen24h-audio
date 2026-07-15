@@ -9,7 +9,7 @@ Description: {description}
 Requirements:
 1. Divide the story into 6-8 major Story Arcs, totaling 150+ chapters.
 2. Ensure slow-burn pacing, deep world-building, and character growth.
-3. Keep all English proper nouns and character names (e.g. Jack, Alex, Cortex Engine) in their original English form. Do not translate them to Vietnamese.
+3. Avoid English names and English proper nouns. Use Vietnamese names (e.g., Phong, Nam, Vy, Linh) and Vietnamese-style proper nouns. Keep all names natural to Vietnamese readers.
 4. Output the outline as a structured JSON object with the following schema:
 {{
   "title": "Novel Title",
@@ -35,7 +35,7 @@ Global story status: {global_status}
 Requirements:
 1. Break down the arc into individual chapters. For each chapter, outline the main event, key characters present, and narrative goals.
 2. Maintain slow-burn, detailed pacing.
-3. Keep English names and proper nouns in original English (do not translate to Vietnamese).
+3. Avoid English names. Use Vietnamese names for all characters, places, and organizations.
 4. Output as a JSON array of chapters:
 [
   {{
@@ -62,7 +62,7 @@ Context and Resources:
 
 Constraints:
 1. Word count: Target 1500 to 2500 words. Describe environments, character body language, internal thoughts, and detailed conversations.
-2. Tone & Vocabulary: Keep all English proper nouns and names in original English (e.g., use "Jack", "Alex", "Cortex Engine", "AI"). Do not translate them into Vietnamese.
+2. Tone & Vocabulary: Avoid English proper nouns and English names. Use Vietnamese names and natural Vietnamese terminology.
 3. Protagonist Progression: The protagonist ({protagonist_name}) currently has power level: {protagonist_power} and stats: {protagonist_stats}.
    - **CRITICAL**: The protagonist CANNOT level up or obtain new powers in this chapter unless the failure flag is TRUE (failure_flag = {failure_flag}).
    - If failure_flag is False, the protagonist must face challenging obstacles, struggle, or experience setbacks without a breakthrough. Keep their powers exactly as is.
@@ -130,7 +130,7 @@ Analyze the chapter and answer the following questions:
 3. **Protagonist Progression Check**: Did the protagonist obtain a breakthrough or easily defeat an opponent?
    - If failure_flag is false: Did the protagonist break this constraint and level up anyway? (This is a violation).
    - Did the protagonist win a major fight too easily?
-4. **Vocabulary Check**: Are any English proper nouns or names translated to Vietnamese? (This is a violation).
+4. **Vocabulary Check**: Are any character names or proper nouns in English? (Prefer Vietnamese names and terms. Avoid English names).
 
 Output a JSON response:
 {{
@@ -139,4 +139,23 @@ Output a JSON response:
   "feedback": "Detailed feedback of issues found",
   "violations": ["List of specific violations like 'Protagonist leveled up without failure flag' or 'Rushed pacing'"]
 }}
+"""
+
+BRAINSTORM_PROMPT = """
+You are a creative content producer. Brainstorm a completely original, highly compelling novel title and description targeted at teenagers (13-19 years old).
+The genre can be Sci-Fi, High Fantasy, Cyberpunk, Isekai, or Magic Academy.
+
+Requirements:
+1. Brainstorm a cool and catchy title. Keep it in Vietnamese (e.g. "Kẻ Vô Năng Của Học Viện" or "Giao Thức Tĩnh Lặng").
+2. The description must detail:
+   - The world setting and its core magic/technology system.
+   - The main protagonist (a teenager, starting weak or with a major handicap, facing challenges, slow growth, not overpowered).
+   - The main conflict or driving force.
+3. Use Vietnamese names for all characters (e.g., Phong, Nam, Vy, Linh) and Vietnamese terms for organizations and places. Avoid English names.
+4. Output a JSON object with:
+{
+  "title": "Brainstormed Title",
+  "description": "Detailed premise description"
+}
+Ensure the JSON is strictly formatted and valid. Do not wrap in markdown quotes.
 """
