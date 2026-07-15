@@ -2,9 +2,27 @@ import json
 import time
 import re
 import google.generativeai as genai
+import sys
 from src import config
 from src import database
 from templates import prompts
+
+def safe_print(*args, **kwargs):
+    """Override built-in print to prevent UnicodeEncodeError on Windows terminals."""
+    msg = " ".join(str(arg) for arg in args)
+    try:
+        sys.stdout.write(msg + kwargs.get("end", "\n"))
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        try:
+            encoding = sys.stdout.encoding or 'utf-8'
+            sys.stdout.write(msg.encode(encoding, errors='replace').decode(encoding) + kwargs.get("end", "\n"))
+            sys.stdout.flush()
+        except Exception:
+            sys.stdout.write(msg.encode('ascii', errors='replace').decode('ascii') + kwargs.get("end", "\n"))
+            sys.stdout.flush()
+
+print = safe_print
 
 # Configure Gemini API
 if config.GEMINI_API_KEY:
@@ -143,8 +161,14 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
     arc_title = arc.get("title")
     start_ch = arc.get("start_chapter")
     end_ch = arc.get("end_chapter")
+    arc_summary = arc.get("summary", "Tiếp tục diễn biến của bối cảnh học viện.")
     
     print(f"[INFO] Generating blueprints for Arc {arc_num}: '{arc_title}' (Chapters {start_ch} - {end_ch})...")
+    
+    # Fetch novel info for context
+    novel = database.get_novel(novel_id)
+    novel_title = novel.get("title", "Truyện mới")
+    novel_description = novel.get("description", "")
     
     # Fetch existing chapters to inform the arc planner of current status
     existing_chapters = database.get_all_chapters(novel_id)
@@ -153,6 +177,9 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
         status_summary += f" Latest chapter was: {existing_chapters[-1]['title']}"
         
     prompt = prompts.ARC_PROMPT.format(
+        novel_title=novel_title,
+        novel_description=novel_description,
+        arc_summary=arc_summary,
         arc_number=arc_num,
         arc_title=arc_title,
         start_chapter=start_ch,
@@ -163,20 +190,53 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
     blueprints_json = call_gemini(prompt, json_mode=True)
     
     try:
-        blueprints = safe_loads(blueprints_json)
-        # Pre-insert chapters with blueprints
+        try:
+            blueprints = safe_loads(blueprints_json)
+            if not isinstance(blueprints, list):
+                raise ValueError("Parsed blueprints is not a list")
+        except Exception as e:
+            print(f"[WARNING] Failed to parse blueprints JSON: {e}. Attempting recovery...")
+            blueprints = []
+            # Find complete JSON blocks for chapters in the raw response
+            matches = re.findall(r"\{\s*\"chapter_number\"[\s\S]*?\}", blueprints_json)
+            for m in matches:
+                try:
+                    ch_obj = json.loads(m)
+                    if isinstance(ch_obj, dict):
+                        blueprints.append(ch_obj)
+                except Exception:
+                    try:
+                        ch_obj = safe_loads(m)
+                        if isinstance(ch_obj, dict):
+                            blueprints.append(ch_obj)
+                    except Exception:
+                        pass
+
+        # If still empty, create a default placeholder
+        if not blueprints:
+            print("[WARNING] Could not recover any blueprints. Creating default placeholder.")
+            blueprints = [{
+                "chapter_number": start_ch or 1,
+                "chapter_title": "Khởi Đầu Mới",
+                "blueprint": "Bắt đầu câu chuyện, giới thiệu nhân vật và thế giới học viện.",
+                "characters_present": [],
+                "narrative_goal": "Giới thiệu bối cảnh"
+            }]
+
         inserted_chapters = []
         for ch_data in blueprints:
+            if not isinstance(ch_data, dict):
+                continue
             ch_num = ch_data.get("chapter_number")
-            ch_title = ch_data.get("chapter_title")
-            blueprint_text = ch_data.get("blueprint")
+            ch_title = ch_data.get("chapter_title") or "Chương Tiếp Theo"
+            blueprint_text = ch_data.get("blueprint") or "Tiếp tục diễn biến câu chuyện."
             
             # Save chapter blueprint as initial content placeholder
             ch_record = database.create_chapter(
                 novel_id=novel_id,
                 chapter_number=ch_num,
                 title=ch_title,
-                content=f"BLUEPRINT: {blueprint_text}\nCHARACTERS: {', '.join(ch_data.get('characters_present', []))}"
+                content=f"BLUEPRINT: {blueprint_text}"
             )
             inserted_chapters.append(ch_record)
             
