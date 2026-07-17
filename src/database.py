@@ -178,3 +178,11 @@ def upsert_narrative_thread(novel_id: str, thread_name: str, description: str, s
         "status": status
     }, on_conflict="id").execute()
     return response.data[0] if response.data else {}
+
+def update_novel_description(novel_id: str, description: str) -> dict:
+    """Update description of a novel."""
+    client = get_client()
+    response = client.table("novels").update({
+        "description": description
+    }).eq("id", novel_id).execute()
+    return response.data[0] if response.data else {}
