@@ -67,8 +67,17 @@ def get_proper_noun_words(chapter_id: str) -> list:
     unique_words.sort(key=len, reverse=True)
     return unique_words
 
+def sanitize_voice_name(voice: str) -> str:
+    """Extract short voice name from Microsoft full voice name if needed."""
+    match = re.search(r"\(([^,]+),\s*([^)]+)\)", voice)
+    if match:
+        lang, name = match.groups()
+        return f"{lang.strip()}-{name.strip()}"
+    return voice
+
 def text_to_ssml(text: str, chapter_id: str, voice: str, rate: str, pitch: str) -> str:
     """Wrap text in SSML and slow down English proper nouns."""
+    voice = sanitize_voice_name(voice)
     # Escape XML special characters
     escaped_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     try:
@@ -114,13 +123,6 @@ async def _run_tts_async(ssml: str, audio_path: str, srt_path: str):
 def generate_voice_and_subs(text: str, chapter_id: str) -> tuple:
     """
     Generate MP3 voice file and SRT subtitles for a chapter.
-    
-    Args:
-        text (str): Chapter content text.
-        chapter_id (str): ID of the chapter.
-        
-    Returns:
-        tuple: (audio_file_path, srt_file_path)
     """
     audio_path = os.path.join(config.OUTPUT_DIR, f"{chapter_id}_raw.mp3")
     srt_path = os.path.join(config.OUTPUT_DIR, f"{chapter_id}.srt")
