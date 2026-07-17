@@ -67,6 +67,13 @@ async def _run_tts_async(text: str, voice: str, rate: str, pitch: str, audio_pat
 def generate_voice_and_subs(text: str, chapter_id: str) -> tuple:
     """
     Generate MP3 voice file and SRT subtitles for a chapter.
+    
+    Args:
+        text (str): Chapter content text.
+        chapter_id (str): ID of the chapter.
+        
+    Returns:
+        tuple: (audio_file_path, srt_file_path)
     """
     audio_path = os.path.join(config.OUTPUT_DIR, f"{chapter_id}_raw.mp3")
     srt_path = os.path.join(config.OUTPUT_DIR, f"{chapter_id}.srt")
