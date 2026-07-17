@@ -63,14 +63,14 @@ Context and Resources:
 - Previous Chapters Context: {previous_content}
 
 Constraints:
-1. Word count: Target 1500 to 2500 words. Describe environments, character body language, internal thoughts, and detailed conversations.
+1. Word count: Target 2200 to 3000 words (MUST be at least 2000 words to ensure 10+ minutes speaking time). Describe environments, character body language, internal thoughts, and detailed conversations in great depth. Do not summarize events; write them out scene-by-scene.
 2. Tone & Vocabulary: Avoid English proper nouns and English names. Use Vietnamese names and natural Vietnamese terminology.
 3. Protagonist Progression: The protagonist ({protagonist_name}) currently has power level: {protagonist_power} and stats: {protagonist_stats}.
    - **CRITICAL**: The protagonist CANNOT level up or obtain new powers in this chapter unless the failure flag is TRUE (failure_flag = {failure_flag}).
    - If failure_flag is False, the protagonist must face challenging obstacles, struggle, or experience setbacks without a breakthrough. Keep their powers exactly as is.
 4. Dialogue: Make the conversation between characters dynamic and teenager-friendly (50% dialogue/action, 50% description).
 
-Write the chapter in Vietnamese. Keep the output as the raw novel content only (no chat or introductory text).
+Write the chapter in Vietnamese. Keep the output as the raw novel content only (do not include conversational chat filler or introduction like "Here is the chapter...", but DO write the prologue/story introduction if it is part of the chapter content).
 """
 
 EXTRACT_ENTITIES_PROMPT = """
