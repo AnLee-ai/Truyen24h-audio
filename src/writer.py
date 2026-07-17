@@ -36,6 +36,47 @@ def safe_loads(text: str):
         cleaned = match.group(1).strip()
     return json.loads(cleaned)
 
+def remove_repetitive_sentences(text: str) -> str:
+    """Clean duplicate consecutive sentences or paragraphs."""
+    paragraphs = text.split("\n")
+    cleaned_paragraphs = []
+    
+    for para in paragraphs:
+        if not para.strip():
+            cleaned_paragraphs.append("")
+            continue
+        # Split paragraph into sentences
+        # Matches ending punctuation followed by spaces or end of string
+        sentences = re.split(r'(?<=[.?!])\s+', para)
+        cleaned_sentences = []
+        for sentence in sentences:
+            s_strip = sentence.strip()
+            if not s_strip:
+                continue
+            # Check if this sentence is a duplicate of the last added sentence
+            if cleaned_sentences and cleaned_sentences[-1].strip().lower() == s_strip.lower():
+                continue
+            cleaned_sentences.append(sentence)
+        cleaned_paragraphs.append(" ".join(cleaned_sentences))
+        
+    # Filter duplicate consecutive paragraphs
+    final_paragraphs = []
+    last_non_empty = None
+    for p in cleaned_paragraphs:
+        if not p.strip():
+            if final_paragraphs and final_paragraphs[-1] == "":
+                continue
+            final_paragraphs.append("")
+            continue
+            
+        if last_non_empty and last_non_empty.strip().lower() == p.strip().lower():
+            continue # Skip duplicate paragraph
+            
+        final_paragraphs.append(p)
+        last_non_empty = p
+        
+    return "\n".join(final_paragraphs)
+
 def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
     """Helper to call LLM (Groq if key configured, otherwise Gemini API) with backoff."""
     if config.GROQ_API_KEY:
@@ -131,8 +172,19 @@ def init_novel_pipeline(title: str, description: str) -> dict:
     novel_id = novel["id"]
     print(f"[INFO] Created novel record in database. ID: {novel_id}")
     
-    # 2. Generate Global Outline (JSON of Arcs)
-    prompt = prompts.OUTLINE_PROMPT.format(title=title, description=description)
+    # Generate expanded plot summary in Vietnamese and update description
+    try:
+        print("[INFO] Generating expanded plot summary in Vietnamese...")
+        plot_prompt = prompts.PLOT_EXPANSION_PROMPT.format(title=title, description=description)
+        detailed_plot = call_gemini(plot_prompt)
+        database.update_novel_description(novel_id, detailed_plot)
+        novel["description"] = detailed_plot  # Update local novel object description
+        print("[INFO] Expanded plot summary stored in novels table.")
+    except Exception as e:
+        print(f"[WARNING] Failed to generate/store expanded plot summary: {e}")
+    
+    # 2. Generate Global Outline (JSON of Arcs) using the detailed plot context
+    prompt = prompts.OUTLINE_PROMPT.format(title=title, description=novel["description"])
     outline_json = call_gemini(prompt, json_mode=True)
     
     try:
@@ -271,13 +323,17 @@ def get_current_arc(novel_id: str, chapter_number: int) -> dict:
 
 def write_next_chapter(novel_id: str) -> dict:
     """Orchestrate the generation and database sync of the next chapter."""
-    # 1. Determine next chapter number
-    latest_ch = database.get_latest_chapter(novel_id)
+    # 1. Determine next chapter number by finding the first blueprint placeholder
+    all_chapters = database.get_all_chapters(novel_id)
+    next_ch_record = next((c for c in all_chapters if c["content"].startswith("BLUEPRINT:")), None)
     
-    next_ch_number = 1
-    # Check if latest chapter is already written (not just a blueprint placeholder)
-    if latest_ch and not latest_ch["content"].startswith("BLUEPRINT:"):
-        next_ch_number = latest_ch["chapter_number"] + 1
+    if next_ch_record:
+        next_ch_number = next_ch_record["chapter_number"]
+    else:
+        if all_chapters:
+            next_ch_number = all_chapters[-1]["chapter_number"] + 1
+        else:
+            next_ch_number = 1
         
     print(f"[INFO] Initiating writing process for Chapter {next_ch_number}...")
     
@@ -285,7 +341,6 @@ def write_next_chapter(novel_id: str) -> dict:
     current_arc = get_current_arc(novel_id, next_ch_number)
     
     # Fetch the chapter record for next_ch_number
-    all_chapters = database.get_all_chapters(novel_id)
     chapter_record = next((c for c in all_chapters if c["chapter_number"] == next_ch_number), None)
     
     # If chapter record doesn't exist, we might have crossed into a new Arc
@@ -334,6 +389,15 @@ def write_next_chapter(novel_id: str) -> dict:
     max_attempts = 3
     final_content = ""
     
+    extra_intro_instruction = ""
+    if next_ch_number == 1:
+        extra_intro_instruction = (
+            "\n\n**CHỈ THỊ QUAN TRỌNG CHO CHƯƠNG 1**:\n"
+            "Vì đây là Chương 1, trước khi bắt đầu kể chuyện, bạn BẮT BUỘC phải mở đầu bằng một phần dẫn lược ngắn (Prologue) "
+            "giới thiệu sơ lược về bối cảnh thế giới (world rules), nhân vật chính (protagonist), dòng thời gian và hoàn cảnh khởi đầu "
+            "để người nghe có cái nhìn toàn cảnh trước khi bước vào câu chuyện."
+        )
+        
     prompt = prompts.WRITING_PROMPT.format(
         chapter_number=next_ch_number,
         chapter_title=chapter_record["title"],
@@ -347,7 +411,7 @@ def write_next_chapter(novel_id: str) -> dict:
         protagonist_power=protagonist_power,
         protagonist_stats=protagonist_stats,
         failure_flag=str(failure_flag)
-    )
+    ) + extra_intro_instruction
     
     while attempt < max_attempts:
         attempt += 1
@@ -380,10 +444,11 @@ def write_next_chapter(novel_id: str) -> dict:
             break
             
     # 5. Save written chapter to Supabase
-    # Update content of chapter_record
+    # Update content of chapter_record (cleaning consecutive repetitions first)
+    cleaned_content = remove_repetitive_sentences(final_content)
     client = database.get_client()
     response = client.table("chapters")\
-        .update({"content": final_content})\
+        .update({"content": cleaned_content})\
         .eq("id", chapter_record["id"])\
         .execute()
     updated_chapter = response.data[0] if response.data else {}
