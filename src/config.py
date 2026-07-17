@@ -33,7 +33,7 @@ GROQ_MODEL_WRITER = os.getenv("GROQ_MODEL_WRITER", "llama-3.3-70b-versatile")
 
 # TTS configurations
 DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "vi-VN-HoaiMyNeural")  # Alternative: vi-VN-NamMinhNeural
-DEFAULT_RATE = os.getenv("DEFAULT_RATE", "-5%")  # Slightly slower for natural feel
+DEFAULT_RATE = os.getenv("DEFAULT_RATE", "+10%")  # Slightly faster (1.1x) for user preference
 DEFAULT_PITCH = os.getenv("DEFAULT_PITCH", "+0Hz")
 
 # Validate critical configs
