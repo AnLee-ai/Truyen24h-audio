@@ -161,3 +161,14 @@ Requirements:
 }
 Ensure the JSON is strictly formatted and valid. Do not wrap in markdown quotes.
 """
+
+PLOT_EXPANSION_PROMPT = """
+Dựa vào tiêu đề và tóm tắt ngắn dưới đây, hãy viết một cốt truyện chi tiết (khoảng 300-500 từ) bằng tiếng Việt cho tiểu thuyết này.
+Nêu rõ bối cảnh thế giới, mâu thuẫn chính, và hành trình phát triển của nhân vật chính. 
+Hạn chế sử dụng tên tiếng Anh hoặc danh từ riêng tiếng Anh. Hãy dùng tên thuần Việt (ví dụ: Trần Lam, Linh Vy...).
+
+Tiêu đề: {title}
+Tóm tắt ngắn: {description}
+
+Cốt truyện chi tiết:
+"""
