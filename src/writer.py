@@ -417,6 +417,18 @@ def write_next_chapter(novel_id: str) -> dict:
         print(f"[INFO] Writing chapter draft (Attempt {attempt}/{max_attempts})...")
         final_content = call_gemini(prompt)
         
+        # Strict word count validation (MUST be at least 1800 words for 10+ mins audio)
+        word_count = len(final_content.split())
+        print(f"[INFO] Generated draft length: {word_count} words.")
+        if word_count < 1800 and attempt < max_attempts:
+            print(f"[WARNING] Draft too short ({word_count} words). Requesting longer expansion...")
+            prompt = prompt + (
+                f"\n\n**CẢNH BÁO LỚN**: Bản thảo trước quá ngắn (chỉ có {word_count} từ). "
+                f"Để đảm bảo chương dài ít nhất 2000 từ (đạt 10 phút nói), bạn BẮT BUỘC phải viết dài gấp đôi. "
+                f"Hãy mở rộng chi tiết các tình tiết, miêu tả sâu sắc thế giới, suy nghĩ của nhân vật và kéo dài các cuộc đối thoại."
+            )
+            continue
+            
         # Editor Review
         review_prompt = prompts.REVIEW_PROMPT.format(
             chapter_number=next_ch_number,
