@@ -389,15 +389,6 @@ def write_next_chapter(novel_id: str) -> dict:
     max_attempts = 3
     final_content = ""
     
-    extra_intro_instruction = ""
-    if next_ch_number == 1:
-        extra_intro_instruction = (
-            "\n\n**CHỈ THỊ QUAN TRỌNG CHO CHƯƠNG 1**:\n"
-            "Vì đây là Chương 1, trước khi bắt đầu kể chuyện, bạn BẮT BUỘC phải mở đầu bằng một phần dẫn lược ngắn (Prologue) "
-            "giới thiệu sơ lược về bối cảnh thế giới (world rules), nhân vật chính (protagonist), dòng thời gian và hoàn cảnh khởi đầu "
-            "để người nghe có cái nhìn toàn cảnh trước khi bước vào câu chuyện."
-        )
-        
     prompt = prompts.WRITING_PROMPT.format(
         chapter_number=next_ch_number,
         chapter_title=chapter_record["title"],
@@ -411,7 +402,15 @@ def write_next_chapter(novel_id: str) -> dict:
         protagonist_power=protagonist_power,
         protagonist_stats=protagonist_stats,
         failure_flag=str(failure_flag)
-    ) + extra_intro_instruction
+    )
+    
+    if next_ch_number == 1:
+        prologue_instruction = (
+            "- Phần dẫn lược (Prologue): BẮT BUỘC phải mở đầu chương bằng một đoạn dẫn lược ngắn "
+            "giới thiệu sơ lược bối cảnh thế giới, nhân vật chính, hoàn cảnh và dòng thời gian hiện tại "
+            "để người nghe có cái nhìn toàn cảnh trước khi bắt đầu."
+        )
+        prompt = prompt.replace("Constraints:", f"Constraints:\n{prologue_instruction}")
     
     while attempt < max_attempts:
         attempt += 1
