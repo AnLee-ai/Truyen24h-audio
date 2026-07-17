@@ -89,7 +89,8 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
         data = {
             "model": config.GROQ_MODEL_WRITER,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7
+            "temperature": 0.7,
+            "max_tokens": 4096  # Enforce large output token window for 10+ minutes content
         }
         if json_mode:
             data["response_format"] = {"type": "json_object"}
@@ -122,10 +123,12 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
 
     # Fallback to Gemini API
     model_name = config.GEMINI_MODEL_WRITER
-    generation_config = {}
+    generation_config = {
+        "max_output_tokens": 4096  # Allow up to 4096 output tokens for long chapters
+    }
     
     if json_mode:
-        generation_config = {"response_mime_type": "application/json"}
+        generation_config["response_mime_type"] = "application/json"
         
     model = genai.GenerativeModel(model_name, generation_config=generation_config)
     
