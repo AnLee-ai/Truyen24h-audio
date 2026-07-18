@@ -90,7 +90,7 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
             "model": config.GROQ_MODEL_WRITER,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 4096  # Enforce large output token window for 10+ minutes content
+            "max_tokens": 2800  # Safe threshold for Groq Free Tier (6000 TPM limit)
         }
         if json_mode:
             data["response_format"] = {"type": "json_object"}
