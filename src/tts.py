@@ -137,8 +137,8 @@ def shift_srt_time(srt_content: str, offset_seconds: float, start_index: int) ->
         
     return "\n".join(shifted_lines), max_ms / 1000.0
 
-async def _run_tts_chunk_async(text: str, voice: str, rate: str, pitch: str, audio_path: str, srt_path: str, max_retries: int = 3):
-    """Run edge-tts for a single text chunk with retry logic."""
+async def _run_tts_chunk_async(text: str, voice: str, rate: str, pitch: str, audio_path: str, srt_path: str, max_retries: int = 5):
+    """Run edge-tts for a single text chunk with retry logic and timeout."""
     voice = sanitize_voice_name(voice)
     
     for attempt in range(max_retries):
@@ -151,12 +151,16 @@ async def _run_tts_chunk_async(text: str, voice: str, rate: str, pitch: str, aud
             )
             submaker = edge_tts.SubMaker()
             
-            with open(audio_path, "wb") as audio_file:
-                async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        audio_file.write(chunk["data"])
-                    elif chunk["type"] in ("WordBoundary", "SentenceBoundary", "Metadata"):
-                        submaker.feed(chunk)
+            async def write_stream():
+                with open(audio_path, "wb") as audio_file:
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            audio_file.write(chunk["data"])
+                        elif chunk["type"] in ("WordBoundary", "SentenceBoundary", "Metadata"):
+                            submaker.feed(chunk)
+            
+            # 90 second timeout for a single chunk synthesis to prevent hanging on slow network
+            await asyncio.wait_for(write_stream(), timeout=90.0)
                         
             # Verify that the audio file is valid
             if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
@@ -166,7 +170,8 @@ async def _run_tts_chunk_async(text: str, voice: str, rate: str, pitch: str, aud
                 
             print(f"[WARNING] TTS attempt {attempt+1} generated empty file. Retrying...")
         except Exception as e:
-            print(f"[WARNING] TTS attempt {attempt+1} failed with error: {e}. Retrying...")
+            err_msg = str(e) or "TimeoutError"
+            print(f"[WARNING] TTS attempt {attempt+1} failed with error: {err_msg}. Retrying...")
             if attempt == max_retries - 1:
                 raise e
             await asyncio.sleep(2)  # Wait 2 seconds before retrying
