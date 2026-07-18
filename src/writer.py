@@ -77,9 +77,24 @@ def remove_repetitive_sentences(text: str) -> str:
         
     return "\n".join(final_paragraphs)
 
+def clean_chapter_content(text: str) -> str:
+    """Clean draft content, stripping markdown and prefix headers like 'Dẫn lược:', 'Chương X:', etc."""
+    cleaned = text.strip()
+    
+    # Remove markdown formatting and prefix headers at the start
+    # e.g. **Dẫn lược:** or *Dẫn lược:* or Dẫn lược: or **Prologue:**
+    pattern = r"^\s*(?:\*\*|\*|__|_)*\s*(?:Dẫn lược|Giới thiệu|Phần dẫn lược|Tóm tắt bối cảnh|Prologue|Introduction)\s*(?:\*\*|\*|__|_)*\s*[:：\-–—]\s*(?:\*\*|\*|__|_)*\s*"
+    cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+    
+    # Clean consecutive duplicate sentences/paragraphs
+    cleaned = remove_repetitive_sentences(cleaned)
+    return cleaned
+
 def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
     """Helper to call LLM (Groq if key configured, otherwise Gemini API) with backoff."""
-    if config.GROQ_API_KEY:
+    use_groq = bool(config.GROQ_API_KEY)
+    
+    if use_groq:
         import requests
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -95,6 +110,7 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
         if json_mode:
             data["response_format"] = {"type": "json_object"}
             
+        groq_failed = False
         for attempt in range(retries + 2):  # Increase retries for Groq to handle TPM limits
             try:
                 response = requests.post(url, json=data, headers=headers, timeout=120)
@@ -104,22 +120,29 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
                     if content:
                         return content.strip()
                 
-                if response.status_code == 429:
-                    wait_time = 20 + (attempt * 10)
-                    print(f"[WARNING] Groq rate limit (429) hit. Sleeping {wait_time}s to reset TPM...")
-                    time.sleep(wait_time)
-                    continue
-                    
+                # If rate limit (429) or payload too large / TPM limit (413) is hit:
+                if response.status_code in (413, 429):
+                    print(f"[WARNING] Groq returned status {response.status_code} (Rate Limit/TPM Limit). Falling back to Gemini API...")
+                    groq_failed = True
+                    break
+                
                 raise RuntimeError(f"Groq API returned status {response.status_code}: {response.text}")
             except Exception as e:
-                if "429" in str(e):
-                    wait_time = 20 + (attempt * 10)
-                    print(f"[WARNING] Groq rate limit hit: {e}. Sleeping {wait_time}s...")
+                err_msg = str(e)
+                if "429" in err_msg or "413" in err_msg:
+                    print(f"[WARNING] Groq rate/TPM limit hit: {err_msg}. Falling back to Gemini API...")
+                    groq_failed = True
+                    break
                 else:
                     wait_time = (attempt + 1) * 5
                     print(f"[WARNING] Groq call failed: {e}. Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-        raise RuntimeError("Max retries exceeded calling Groq API.")
+                    time.sleep(wait_time)
+        else:
+            groq_failed = True
+            
+        if groq_failed:
+            print("[INFO] Initiating automatic fallback to Gemini API...")
+            # Fall through to Gemini API execution below!
 
     # Fallback to Gemini API
     model_name = config.GEMINI_MODEL_WRITER
@@ -409,28 +432,39 @@ def write_next_chapter(novel_id: str) -> dict:
     
     if next_ch_number == 1:
         prologue_instruction = (
-            "- Phần dẫn lược (Prologue): BẮT BUỘC phải mở đầu chương bằng một đoạn dẫn lược ngắn "
-            "giới thiệu sơ lược bối cảnh thế giới, nhân vật chính, hoàn cảnh và dòng thời gian hiện tại "
-            "để người nghe có cái nhìn toàn cảnh trước khi bắt đầu."
+            "- Phần dẫn lược (Prologue): BẮT BUỘC phải mở đầu chương bằng một phần Dẫn lược cực kỳ chi tiết, dài và sống động (khoảng 300 - 500 từ). "
+            "Phần này phải giới thiệu sâu sắc và hấp dẫn về bối cảnh thế giới linh hồn, hệ thống Tinh Thần Ấn, lịch sử cấm kỵ của chiếc hộp đồng Đông Sơn, "
+            "các nhân vật chính (Trần Lam, Linh Vy, Minh Đức, Thùy Linh, Cao Bá) và mốc thời gian hiện tại trước thềm Giờ Khai Mạc. "
+            "**QUAN TRỌNG**: KHÔNG viết các tiêu đề như 'Dẫn lược:', 'Giới thiệu:', 'Prologue:', hay các ký hiệu markdown, "
+            "mà hãy viết thẳng vào nội dung truyện một cách tự nhiên như các đoạn văn mở đầu câu chuyện."
         )
         prompt = prompt.replace("Constraints:", f"Constraints:\n{prologue_instruction}")
     
     while attempt < max_attempts:
         attempt += 1
         print(f"[INFO] Writing chapter draft (Attempt {attempt}/{max_attempts})...")
-        final_content = call_gemini(prompt)
         
-        # Strict word count validation (MUST be at least 1800 words for 10+ mins audio)
-        word_count = len(final_content.split())
-        print(f"[INFO] Generated draft length: {word_count} words.")
-        if word_count < 1800 and attempt < max_attempts:
-            print(f"[WARNING] Draft too short ({word_count} words). Requesting longer expansion...")
-            prompt = prompt + (
-                f"\n\n**CẢNH BÁO LỚN**: Bản thảo trước quá ngắn (chỉ có {word_count} từ). "
-                f"Để đảm bảo chương dài ít nhất 2000 từ (đạt 10 phút nói), bạn BẮT BUỘC phải viết dài gấp đôi. "
-                f"Hãy mở rộng chi tiết các tình tiết, miêu tả sâu sắc thế giới, suy nghĩ của nhân vật và kéo dài các cuộc đối thoại."
+        # Enforce length restriction at drafting phase
+        draft_attempt = 0
+        current_prompt = prompt
+        final_content = ""
+        while draft_attempt < 3:
+            draft_attempt += 1
+            final_content = call_gemini(current_prompt)
+            word_count = len(final_content.split())
+            print(f"[INFO] Generated draft length: {word_count} words.")
+            if word_count >= 1800:
+                break
+            print(f"[WARNING] Draft too short ({word_count} words). Requesting longer expansion (Attempt {draft_attempt}/3)...")
+            current_prompt = prompt + (
+                f"\n\n**CẢNH BÁO CỰC KỲ QUAN TRỌNG VỀ ĐỘ DÀI (BẮT BUỘC)**:\n"
+                f"Bản thảo bạn vừa viết quá ngắn (chỉ có {word_count} từ), trong khi yêu cầu tối thiểu là 2200 từ để đạt 10 phút nói.\n"
+                f"Để sửa lỗi này, bạn phải viết cực kỳ chi tiết theo hướng dẫn sau:\n"
+                f"1. Chia chương truyện thành ít nhất 5 phân cảnh lớn riêng biệt (Mỗi phân cảnh viết tối thiểu 5-6 đoạn văn dài).\n"
+                f"2. Đi sâu miêu tả cực kỳ tỉ mỉ: cảnh sắc không gian học viện, thời tiết, âm thanh gió thổi, biểu cảm nét mặt từng nhân vật, cử chỉ tay chân, và dòng suy nghĩ nội tâm kéo dài.\n"
+                f"3. Viết các đoạn đối thoại dài, thực tế và sâu sắc giữa các nhân vật (Trần Lam, Linh Vy, Minh Đức, v.v.). Không được viết lướt qua.\n"
+                f"4. TUYỆT ĐỐI không tóm tắt hay kết thúc chương truyện sớm khi chưa đủ độ dài yêu cầu."
             )
-            continue
             
         # Editor Review
         review_prompt = prompts.REVIEW_PROMPT.format(
@@ -458,8 +492,8 @@ def write_next_chapter(novel_id: str) -> dict:
             break
             
     # 5. Save written chapter to Supabase
-    # Update content of chapter_record (cleaning consecutive repetitions first)
-    cleaned_content = remove_repetitive_sentences(final_content)
+    # Update content of chapter_record (cleaning consecutive repetitions and header labels first)
+    cleaned_content = clean_chapter_content(final_content)
     client = database.get_client()
     response = client.table("chapters")\
         .update({"content": cleaned_content})\
