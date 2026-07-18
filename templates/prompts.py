@@ -98,47 +98,77 @@ Output format (strict JSON, do not wrap in markdown):
       "combat_stats": {{ "attack": 15, "defense": 10 }},
       "relationships": {{ "Alex": "ally" }},
       "failure_flag": true,
-      "breakthrough_written": false,
-      "event_summary": "Short summary of what happened to this character in the chapter"
+      "breakthrough_written": false
     }}
   ],
   "new_lore": [
-    {{
-      "keyword": "Ancient Ruin",
-      "description": "Description of the new lore keyword discovered"
-    }}
+    {{ "keyword": "Aetheria", "description": "A floating city in the sky" }}
   ],
   "new_threads": [
-    {{
-      "thread_name": "The Missing Key",
-      "description": "Description of the new active narrative thread introduced"
-    }}
+    {{ "thread_name": "The Missing Key", "description": "Jack needs to find the key to the Cortex Engine" }}
   ]
 }}
-Ensure the JSON is strictly formatted and valid.
 """
 
 REVIEW_PROMPT = """
-You are an expert editor. Review the draft of Chapter {chapter_number}: {chapter_title} for consistency, prose quality, and logical coherence.
+You are a senior novel editor. Review Chapter {chapter_number}: {chapter_title} for quality and consistency.
 
-Review Context:
-- Chapter Content: {chapter_content}
-- World Lore: {world_lore}
-- Character Status: {characters}
-- Protagonist Failure Flag (Active?): {failure_flag}
-- Protagonist Last Breakthrough Chapter: {last_breakthrough_chapter}
+Chapter Content:
+{chapter_content}
+
+Reference World Rules and Lore:
+{world_lore}
+
+Reference Character Bible:
+{characters}
+
+Protagonist State:
+- failure_flag: {failure_flag}
+- last_breakthrough_chapter: {last_breakthrough_chapter}
+
+Analyze the chapter and answer the following questions:
+1. **Logic Contradiction**: Does the chapter contradict any established world lore or character profiles? (e.g. eye color change, weapon name mismatch, dead character appearing).
+2. **Pacing Check**: Is the pacing too fast or rushed? (e.g. traveling across a kingdom in a single paragraph, defeating a boss in two sentences). It must be detailed and slow-burn.
+3. **Protagonist Progression Check**: Did the protagonist obtain a breakthrough or easily defeat an opponent?
+   - If failure_flag is false: Did the protagonist break this constraint and level up anyway? (This is a violation).
+   - Did the protagonist win a major fight too easily?
+4. **Vocabulary Check**: Are any character names or proper nouns in English? (Prefer Vietnamese names and terms. Avoid English names).
+
+Output a JSON response:
+{{
+  "pass_review": true/false,
+  "score": 1-10,
+  "feedback": "Detailed feedback of issues found",
+  "violations": ["List of specific violations like 'Protagonist leveled up without failure flag' or 'Rushed pacing'"]
+}}
+"""
+
+BRAINSTORM_PROMPT = """
+You are a creative content producer. Brainstorm a completely original, highly compelling novel title and description targeted at teenagers (13-19 years old).
+The genre can be Sci-Fi, High Fantasy, Cyberpunk, Isekai, or Magic Academy.
 
 Requirements:
-1. Ensure the pacing is appropriate (detailed, slow-burn) and the writing quality is high.
-2. Check for logical contradictions or errors.
-3. Verify character power progression:
-   - If failure_flag is False, make sure the protagonist does NOT show sudden power breakthrough or defeat high-tier foes easily.
-   - If a breakthrough chapter is active or recent, check that it makes logical sense.
-4. Output your review as a JSON object with:
-{{
-  "score": 8, // 1 to 10 scale
-  "pass_review": true, // set to false if major logical/pacing errors exist and chapter needs rewrite
-  "feedback": "Detailed feedback detailing what to improve if pass_review is false"
-}}
-Ensure the JSON is strictly formatted and valid.
+1. Brainstorm a cool and catchy title. Keep it in Vietnamese (e.g. "Kẻ Vô Năng Của Học Viện" or "Giao Thức Tĩnh Lặng").
+2. The description must detail:
+   - The world setting and its core magic/technology system.
+   - The main protagonist (a teenager, starting weak or with a major handicap, facing challenges, slow growth, not overpowered).
+   - The main conflict or driving force.
+3. Use Vietnamese names for all characters (e.g., Phong, Nam, Vy, Linh) and Vietnamese terms for organizations and places. Avoid English names.
+4. Output a JSON object with:
+{
+  "title": "Brainstormed Title",
+  "description": "Detailed premise description"
+}
+Ensure the JSON is strictly formatted and valid. Do not wrap in markdown quotes.
+"""
+
+PLOT_EXPANSION_PROMPT = """
+Dựa vào tiêu đề và tóm tắt ngắn dưới đây, hãy viết một cốt truyện chi tiết (khoảng 300-500 từ) bằng tiếng Việt cho tiểu thuyết này.
+Nêu rõ bối cảnh thế giới, mâu thuẫn chính, và hành trình phát triển của nhân vật chính. 
+Hạn chế sử dụng tên tiếng Anh hoặc danh từ riêng tiếng Anh. Hãy dùng tên thuần Việt (ví dụ: Trần Lam, Linh Vy...).
+
+Tiêu đề: {title}
+Tóm tắt ngắn: {description}
+
+Cốt truyện chi tiết:
 """
