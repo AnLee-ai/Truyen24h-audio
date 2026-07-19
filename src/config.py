@@ -26,8 +26,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Model configurations
-# Using gemini-flash-latest as the primary fast and free model
-GEMINI_MODEL_WRITER = os.getenv("GEMINI_MODEL_WRITER", "gemini-flash-latest")
+# Using gemini-1.5-flash as the primary stable model to avoid the 20 req/day experimental limit
+GEMINI_MODEL_WRITER = os.getenv("GEMINI_MODEL_WRITER", "gemini-1.5-flash")
 GEMINI_MODEL_EMBED = os.getenv("GEMINI_MODEL_EMBED", "gemini-embedding-001")
 GROQ_MODEL_WRITER = os.getenv("GROQ_MODEL_WRITER", "llama-3.3-70b-versatile")
 
