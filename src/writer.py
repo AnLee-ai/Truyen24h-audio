@@ -104,16 +104,19 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
         data = {
             "model": config.GROQ_MODEL_WRITER,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens": 4096  # Allow full length, fallback to Gemini if TPM 413 hit
+            "temperature": 0.7
         }
         if json_mode:
             data["response_format"] = {"type": "json_object"}
             
         groq_failed = False
+        max_tokens_options = [3200, 2400, 1800] if not json_mode else [1000]
+        
         for attempt in range(retries + 2):  # Increase retries for Groq to handle TPM limits
+            current_max_tokens = max_tokens_options[min(attempt, len(max_tokens_options)-1)]
+            data["max_tokens"] = current_max_tokens
             try:
-                response = requests.post(url, json=data, headers=headers, timeout=120)
+                response = requests.post(url, json=data, headers=headers, timeout=120)  # type: ignore[arg-type]
                 if response.status_code == 200:
                     resp_json = response.json()
                     content = resp_json["choices"][0]["message"]["content"]
@@ -122,17 +125,28 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
                 
                 # If rate limit (429) or payload too large / TPM limit (413) is hit:
                 if response.status_code in (413, 429):
-                    print(f"[WARNING] Groq returned status {response.status_code} (Rate Limit/TPM Limit). Falling back to Gemini API...")
-                    groq_failed = True
-                    break
+                    if not json_mode and current_max_tokens > 1800:
+                        next_tokens = max_tokens_options[min(attempt+1, len(max_tokens_options)-1)]
+                        print(f"[WARNING] Groq returned status {response.status_code}. Retrying with smaller max_tokens ({current_max_tokens} -> {next_tokens})...")
+                        time.sleep(3)
+                        continue
+                    else:
+                        print(f"[WARNING] Groq returned status {response.status_code} (Rate Limit/TPM Limit). Falling back to Gemini API...")
+                        groq_failed = True
+                        break
                 
                 raise RuntimeError(f"Groq API returned status {response.status_code}: {response.text}")
             except Exception as e:
                 err_msg = str(e)
                 if "429" in err_msg or "413" in err_msg:
-                    print(f"[WARNING] Groq rate/TPM limit hit: {err_msg}. Falling back to Gemini API...")
-                    groq_failed = True
-                    break
+                    if not json_mode and current_max_tokens > 1800:
+                        print(f"[WARNING] Groq rate/TPM limit hit. Retrying with smaller max_tokens...")
+                        time.sleep(3)
+                        continue
+                    else:
+                        print(f"[WARNING] Groq rate/TPM limit hit: {err_msg}. Falling back to Gemini API...")
+                        groq_failed = True
+                        break
                 else:
                     wait_time = (attempt + 1) * 5
                     print(f"[WARNING] Groq call failed: {e}. Retrying in {wait_time}s...")
@@ -397,18 +411,18 @@ def write_next_chapter(novel_id: str) -> dict:
     
     # B. World Lore
     lores = database.get_world_lore(novel_id)
-    world_lore_text = "\n".join([f"- {l['keyword']}: {l['description']}" for l in lores])
+    world_lore_text = "\n".join([f"- {lore['keyword']}: {lore['description']}" for lore in lores])
     
     # C. History Vector Search (Semantic RAG)
     query_embed = get_embedding(blueprint_text)
-    semantic_history = database.search_episodes(novel_id, query_embed, limit=5)
+    semantic_history = database.search_episodes(novel_id, query_embed, limit=3)
     history_text = "\n".join([f"- Chapter {h['chapter_id']}: {h['event_summary']}" for h in semantic_history])
     
     # D. Working Memory (Last 2 written chapters content)
     previous_chapters = [c for c in all_chapters if c["chapter_number"] < next_ch_number and not c["content"].startswith("BLUEPRINT:")]
     working_memory_text = ""
     for ch in previous_chapters[-2:]:
-        working_memory_text += f"\n--- Chapter {ch['chapter_number']}: {ch['title']} ---\n{ch['content'][:1500]}...\n"
+        working_memory_text += f"\n--- Chapter {ch['chapter_number']}: {ch['title']} ---\n{ch['content'][:800]}...\n"
         
     # 4. Generate Chapter Content with Editor Review loop
     attempt = 0
