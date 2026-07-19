@@ -105,7 +105,7 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
             "model": config.GROQ_MODEL_WRITER,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 2800  # Safe threshold for Groq Free Tier (6000 TPM limit)
+            "max_tokens": 4096  # Allow full length, fallback to Gemini if TPM 413 hit
         }
         if json_mode:
             data["response_format"] = {"type": "json_object"}
@@ -147,7 +147,7 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
     # Fallback to Gemini API
     model_name = config.GEMINI_MODEL_WRITER
     generation_config = {
-        "max_output_tokens": 4096  # Allow up to 4096 output tokens for long chapters
+        "max_output_tokens": 8192  # Allow up to 8192 output tokens for complete long chapters
     }
     
     if json_mode:
@@ -453,18 +453,28 @@ def write_next_chapter(novel_id: str) -> dict:
             final_content = call_gemini(current_prompt)
             word_count = len(final_content.split())
             print(f"[INFO] Generated draft length: {word_count} words.")
-            if word_count >= 1800:
+            ends_abruptly = not final_content.strip().endswith((".", "?", "!", '"', "”", "»", "*"))
+            
+            if word_count >= 1800 and not ends_abruptly:
                 break
-            print(f"[WARNING] Draft too short ({word_count} words). Requesting longer expansion (Attempt {draft_attempt}/3)...")
-            current_prompt = prompt + (
-                f"\n\n**CẢNH BÁO CỰC KỲ QUAN TRỌNG VỀ ĐỘ DÀI (BẮT BUỘC)**:\n"
-                f"Bản thảo bạn vừa viết quá ngắn (chỉ có {word_count} từ), trong khi yêu cầu tối thiểu là 2200 từ để đạt 10 phút nói.\n"
-                f"Để sửa lỗi này, bạn phải viết cực kỳ chi tiết theo hướng dẫn sau:\n"
-                f"1. Chia chương truyện thành ít nhất 5 phân cảnh lớn riêng biệt (Mỗi phân cảnh viết tối thiểu 5-6 đoạn văn dài).\n"
-                f"2. Đi sâu miêu tả cực kỳ tỉ mỉ: cảnh sắc không gian học viện, thời tiết, âm thanh gió thổi, biểu cảm nét mặt từng nhân vật, cử chỉ tay chân, và dòng suy nghĩ nội tâm kéo dài.\n"
-                f"3. Viết các đoạn đối thoại dài, thực tế và sâu sắc giữa các nhân vật (Trần Lam, Linh Vy, Minh Đức, v.v.). Không được viết lướt qua.\n"
-                f"4. TUYỆT ĐỐI không tóm tắt hay kết thúc chương truyện sớm khi chưa đủ độ dài yêu cầu."
-            )
+                
+            if ends_abruptly:
+                print(f"[WARNING] Draft ends abruptly (no punctuation at the end). Requesting completion (Attempt {draft_attempt}/3)...")
+                current_prompt = prompt + (
+                    f"\n\n**CẢNH BÁO CỰC KỲ QUAN TRỌNG**: Bản thảo trước của bạn bị cắt cụt đột ngột ở cuối (chưa hết câu, chưa có dấu chấm câu kết thúc). "
+                    f"Bạn BẮT BUỘC phải viết trọn vẹn câu chuyện, mở rộng chi tiết các phân cảnh, hội thoại và kết thúc chương một cách trọn vẹn bằng dấu chấm câu."
+                )
+            else:
+                print(f"[WARNING] Draft too short ({word_count} words). Requesting longer expansion (Attempt {draft_attempt}/3)...")
+                current_prompt = prompt + (
+                    f"\n\n**CẢNH BÁO CỰC KỲ QUAN TRỌNG VỀ ĐỘ DÀI (BẮT BUỘC)**:\n"
+                    f"Bản thảo bạn vừa viết quá ngắn (chỉ có {word_count} từ), trong khi yêu cầu tối thiểu là 2200 từ để đạt 10 phút nói.\n"
+                    f"Để sửa lỗi này, bạn phải viết cực kỳ chi tiết theo hướng dẫn sau:\n"
+                    f"1. Chia chương truyện thành ít nhất 5 phân cảnh lớn riêng biệt (Mỗi phân cảnh viết tối thiểu 5-6 đoạn văn dài).\n"
+                    f"2. Đi sâu miêu tả cực kỳ tỉ mỉ: cảnh sắc không gian học viện, thời tiết, âm thanh gió thổi, biểu cảm nét mặt từng nhân vật, cử chỉ tay chân, và dòng suy nghĩ nội tâm kéo dài.\n"
+                    f"3. Viết các đoạn đối thoại dài, thực tế và sâu sắc giữa các nhân vật (Trần Lam, Linh Vy, Minh Đức, v.v.). Không được viết lướt qua.\n"
+                    f"4. TUYỆT ĐỐI không tóm tắt hay kết thúc chương truyện sớm khi chưa đủ độ dài yêu cầu."
+                )
             
         # Editor Review
         review_prompt = prompts.REVIEW_PROMPT.format(
