@@ -1,7 +1,8 @@
 import json
 import time
 import re
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import sys
 from src import config
 from src import database
@@ -25,8 +26,15 @@ def safe_print(*args, **kwargs):
 print = safe_print
 
 # Configure Gemini API
-if config.GEMINI_API_KEY:
-    genai.configure(api_key=config.GEMINI_API_KEY)
+_genai_client = None
+
+def get_genai_client():
+    global _genai_client
+    if _genai_client is None:
+        if not config.GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY must be configured in environment variables.")
+        _genai_client = genai.Client(api_key=config.GEMINI_API_KEY)
+    return _genai_client
 
 def safe_loads(text: str):
     """Safely parse JSON string, stripping markdown code block wrappers if present."""
@@ -48,7 +56,7 @@ def remove_repetitive_sentences(text: str) -> str:
         # Split paragraph into sentences
         # Matches ending punctuation followed by spaces or end of string
         sentences = re.split(r'(?<=[.?!])\s+', para)
-        cleaned_sentences = []
+        cleaned_sentences: list[str] = []
         for sentence in sentences:
             s_strip = sentence.strip()
             if not s_strip:
@@ -60,7 +68,7 @@ def remove_repetitive_sentences(text: str) -> str:
         cleaned_paragraphs.append(" ".join(cleaned_sentences))
         
     # Filter duplicate consecutive paragraphs
-    final_paragraphs = []
+    final_paragraphs: list[str] = []
     last_non_empty = None
     for p in cleaned_paragraphs:
         if not p.strip():
@@ -90,7 +98,7 @@ def clean_chapter_content(text: str) -> str:
     cleaned = remove_repetitive_sentences(cleaned)
     return cleaned
 
-def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
+def call_gemini(prompt: str, json_mode: bool = False, retries: int = 5) -> str:
     """Helper to call LLM (Groq if key configured, otherwise Gemini API) with backoff."""
     use_groq = bool(config.GROQ_API_KEY)
     
@@ -109,10 +117,9 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
         if json_mode:
             data["response_format"] = {"type": "json_object"}
             
-        groq_failed = False
         max_tokens_options = [3200, 2400, 1800] if not json_mode else [1000]
         
-        for attempt in range(retries + 2):  # Increase retries for Groq to handle TPM limits
+        for attempt in range(retries):
             current_max_tokens = max_tokens_options[min(attempt, len(max_tokens_options)-1)]
             data["max_tokens"] = current_max_tokens
             try:
@@ -125,58 +132,48 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
                 
                 # If rate limit (429) or payload too large / TPM limit (413) is hit:
                 if response.status_code in (413, 429):
-                    if not json_mode and current_max_tokens > 1800:
-                        next_tokens = max_tokens_options[min(attempt+1, len(max_tokens_options)-1)]
-                        print(f"[WARNING] Groq returned status {response.status_code}. Retrying with smaller max_tokens ({current_max_tokens} -> {next_tokens})...")
-                        time.sleep(3)
-                        continue
-                    else:
-                        print(f"[WARNING] Groq returned status {response.status_code} (Rate Limit/TPM Limit). Falling back to Gemini API...")
-                        groq_failed = True
-                        break
+                    wait_time = 15 + (attempt * 10)
+                    next_tokens = max_tokens_options[min(attempt+1, len(max_tokens_options)-1)]
+                    print(f"[WARNING] Groq returned status {response.status_code}. Sleeping for {wait_time}s and retrying with max_tokens={next_tokens} (Attempt {attempt+1}/{retries})...")
+                    time.sleep(wait_time)
+                    continue
                 
                 raise RuntimeError(f"Groq API returned status {response.status_code}: {response.text}")
             except Exception as e:
                 err_msg = str(e)
                 if "429" in err_msg or "413" in err_msg:
-                    if not json_mode and current_max_tokens > 1800:
-                        print(f"[WARNING] Groq rate/TPM limit hit. Retrying with smaller max_tokens...")
-                        time.sleep(3)
-                        continue
-                    else:
-                        print(f"[WARNING] Groq rate/TPM limit hit: {err_msg}. Falling back to Gemini API...")
-                        groq_failed = True
-                        break
+                    wait_time = 15 + (attempt * 10)
+                    print(f"[WARNING] Groq rate/TPM limit hit: {err_msg}. Sleeping for {wait_time}s and retrying...")
+                    time.sleep(wait_time)
+                    continue
                 else:
                     wait_time = (attempt + 1) * 5
                     print(f"[WARNING] Groq call failed: {e}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
-        else:
-            groq_failed = True
-            
-        if groq_failed:
-            print("[INFO] Initiating automatic fallback to Gemini API...")
-            # Fall through to Gemini API execution below!
+        
+        print("[WARNING] All Groq retries failed. Falling back to Gemini API...")
 
     # Fallback to Gemini API
     model_name = config.GEMINI_MODEL_WRITER
-    generation_config = {
-        "max_output_tokens": 8192  # Allow up to 8192 output tokens for complete long chapters
-    }
+    client = get_genai_client()
     
-    if json_mode:
-        generation_config["response_mime_type"] = "application/json"
-        
-    model = genai.GenerativeModel(model_name, generation_config=generation_config)
+    generation_config = types.GenerateContentConfig(
+        max_output_tokens=8192,
+        response_mime_type="application/json" if json_mode else None
+    )
     
     for attempt in range(retries):
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=generation_config
+            )
             if response.text:
                 return response.text.strip()
             raise ValueError("Empty response from Gemini API.")
         except Exception as e:
-            wait_time = (attempt + 1) * 10
+            wait_time = (attempt + 1) * 15
             print(f"[WARNING] Gemini call failed: {e}. Retrying in {wait_time}s...")
             time.sleep(wait_time)
             
@@ -185,12 +182,15 @@ def call_gemini(prompt: str, json_mode: bool = False, retries: int = 3) -> str:
 def get_embedding(text: str) -> list:
     """Generate vector embedding for semantic search using text-embedding-004."""
     try:
-        result = genai.embed_content(
-            model=f"models/{config.GEMINI_MODEL_EMBED}",
-            content=text,
-            task_type="retrieval_document"
+        client = get_genai_client()
+        result = client.models.embed_content(
+            model=config.GEMINI_MODEL_EMBED,
+            contents=text,
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_DOCUMENT"
+            )
         )
-        emb = result['embedding']
+        emb = result.embeddings[0].values
         # Force exactly 1536 dimensions to match database schema
         if len(emb) > 1536:
             return emb[:1536]
@@ -319,7 +319,7 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
         for ch_data in blueprints:
             if not isinstance(ch_data, dict):
                 continue
-            ch_num = ch_data.get("chapter_number")
+            ch_num = int(ch_data.get("chapter_number", 1))
             ch_title = ch_data.get("chapter_title") or "Chương Tiếp Theo"
             blueprint_text = ch_data.get("blueprint") or "Tiếp tục diễn biến câu chuyện."
             
@@ -475,8 +475,8 @@ def write_next_chapter(novel_id: str) -> dict:
             if ends_abruptly:
                 print(f"[WARNING] Draft ends abruptly (no punctuation at the end). Requesting completion (Attempt {draft_attempt}/3)...")
                 current_prompt = prompt + (
-                    f"\n\n**CẢNH BÁO CỰC KỲ QUAN TRỌNG**: Bản thảo trước của bạn bị cắt cụt đột ngột ở cuối (chưa hết câu, chưa có dấu chấm câu kết thúc). "
-                    f"Bạn BẮT BUỘC phải viết trọn vẹn câu chuyện, mở rộng chi tiết các phân cảnh, hội thoại và kết thúc chương một cách trọn vẹn bằng dấu chấm câu."
+                    "\n\n**CẢNH BÁO CỰC KỲ QUAN TRỌNG**: Bản thảo trước của bạn bị cắt cụt đột ngột ở cuối (chưa hết câu, chưa có dấu chấm câu kết thúc). "
+                    "Bạn BẮT BUỘC phải viết trọn vẹn câu chuyện, mở rộng chi tiết các phân cảnh, hội thoại và kết thúc chương một cách trọn vẹn bằng dấu chấm câu."
                 )
             else:
                 print(f"[WARNING] Draft too short ({word_count} words). Requesting longer expansion (Attempt {draft_attempt}/3)...")
@@ -526,9 +526,9 @@ def write_next_chapter(novel_id: str) -> dict:
     updated_chapter = response.data[0] if response.data else {}
     
     # 6. Post-writing Database Sync (Extract Entities & Update Story Bible)
-    sync_story_bible(novel_id, updated_chapter, chars)
+    sync_story_bible(novel_id, updated_chapter, chars)  # type: ignore[arg-type]
     
-    return updated_chapter
+    return updated_chapter  # type: ignore[return-value]
 
 def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
     """Parse the written chapter to extract status updates and write them to Supabase."""
