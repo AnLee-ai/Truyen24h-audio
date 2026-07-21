@@ -435,7 +435,19 @@ def write_next_chapter(novel_id: str) -> dict:
             print(f"[INFO] Generated draft length: {word_count} words.")
             ends_abruptly = not final_content.strip().endswith((".", "?", "!", '"', "”", "»", "*"))
             
-            if word_count >= 1200 and not ends_abruptly:
+            if ends_abruptly and word_count >= 1500:
+                last_punct = max(
+                    final_content.rfind('.'),
+                    final_content.rfind('?'),
+                    final_content.rfind('!')
+                )
+                if last_punct > 0:
+                    final_content = final_content[:last_punct + 1].strip()
+                    word_count = len(final_content.split())
+                    print(f"[INFO] Automatically trimmed unfinished trailing sentence. Clean word count: {word_count} words.")
+                    ends_abruptly = False
+
+            if word_count >= 1500 and not ends_abruptly:
                 break
                 
             if ends_abruptly:
