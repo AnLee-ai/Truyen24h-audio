@@ -90,7 +90,6 @@ def clean_chapter_content(text: str) -> str:
     cleaned = text.strip()
     
     # Remove markdown formatting and prefix headers at the start
-    # e.g. **Dẫn lược:** or *Dẫn lược:* or Dẫn lược: or **Prologue:**
     pattern = r"^\s*(?:\*\*|\*|__|_)*\s*(?:Dẫn lược|Giới thiệu|Phần dẫn lược|Tóm tắt bối cảnh|Prologue|Introduction)\s*(?:\*\*|\*|__|_)*\s*[:：\-–—]\s*(?:\*\*|\*|__|_)*\s*"
     cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
     
@@ -191,7 +190,6 @@ def get_embedding(text: str) -> list:
             )
         )
         emb = result.embeddings[0].values
-        # Force exactly 1536 dimensions to match database schema
         if len(emb) > 1536:
             return emb[:1536]
         elif len(emb) < 1536:
@@ -199,37 +197,29 @@ def get_embedding(text: str) -> list:
         return emb
     except Exception as e:
         print(f"[ERROR] Failed to generate embedding: {e}")
-        # Return a dummy 1536-dim vector if it fails
         return [0.0] * 1536
 
-# Novel Lifecycle Operations
 def init_novel_pipeline(title: str, description: str) -> dict:
-    """Initialize a novel: create Supabase record and generate global outline."""
     print(f"[INFO] Initializing new novel: '{title}'...")
-    
-    # 1. Save novel metadata to Supabase
     novel = database.init_novel(title, description)
     novel_id = novel["id"]
     print(f"[INFO] Created novel record in database. ID: {novel_id}")
     
-    # Generate expanded plot summary in Vietnamese and update description
     try:
         print("[INFO] Generating expanded plot summary in Vietnamese...")
         plot_prompt = prompts.PLOT_EXPANSION_PROMPT.format(title=title, description=description)
         detailed_plot = call_gemini(plot_prompt)
         database.update_novel_description(novel_id, detailed_plot)
-        novel["description"] = detailed_plot  # Update local novel object description
+        novel["description"] = detailed_plot
         print("[INFO] Expanded plot summary stored in novels table.")
     except Exception as e:
         print(f"[WARNING] Failed to generate/store expanded plot summary: {e}")
     
-    # 2. Generate Global Outline (JSON of Arcs) using the detailed plot context
     prompt = prompts.OUTLINE_PROMPT.format(title=title, description=novel["description"])
     outline_json = call_gemini(prompt, json_mode=True)
     
     try:
         outline = safe_loads(outline_json)
-        # Update novel description to store the structured outline
         database.upsert_narrative_thread(
             novel_id=novel_id,
             thread_name="Global Outline",
@@ -238,7 +228,6 @@ def init_novel_pipeline(title: str, description: str) -> dict:
         print("[INFO] Global Outline generated and stored successfully.")
     except Exception as e:
         print(f"[ERROR] Failed to parse global outline JSON: {e}. Raw content: {outline_json}")
-        # Store as raw text if parsing fails
         database.upsert_narrative_thread(
             novel_id=novel_id,
             thread_name="Global Outline",
@@ -248,7 +237,6 @@ def init_novel_pipeline(title: str, description: str) -> dict:
     return novel
 
 def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
-    """Generate chapter-by-chapter blueprints for a specific story arc."""
     arc_num = arc.get("arc_number")
     arc_title = arc.get("title")
     start_ch = arc.get("start_chapter")
@@ -257,12 +245,10 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
     
     print(f"[INFO] Generating blueprints for Arc {arc_num}: '{arc_title}' (Chapters {start_ch} - {end_ch})...")
     
-    # Fetch novel info for context
     novel = database.get_novel(novel_id)
     novel_title = novel.get("title", "Truyện mới")
     novel_description = novel.get("description", "")
     
-    # Fetch existing chapters to inform the arc planner of current status
     existing_chapters = database.get_all_chapters(novel_id)
     status_summary = f"Written {len(existing_chapters)} chapters."
     if existing_chapters:
@@ -289,7 +275,6 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
         except Exception as e:
             print(f"[WARNING] Failed to parse blueprints JSON: {e}. Attempting recovery...")
             blueprints = []
-            # Find complete JSON blocks for chapters in the raw response
             matches = re.findall(r"\{\s*\"chapter_number\"[\s\S]*?\}", blueprints_json)
             for m in matches:
                 try:
@@ -304,7 +289,6 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
                     except Exception:
                         pass
 
-        # If still empty, create a default placeholder
         if not blueprints:
             print("[WARNING] Could not recover any blueprints. Creating default placeholder.")
             blueprints = [{
@@ -323,7 +307,6 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
             ch_title = ch_data.get("chapter_title") or "Chương Tiếp Theo"
             blueprint_text = ch_data.get("blueprint") or "Tiếp tục diễn biến câu chuyện."
             
-            # Save chapter blueprint as initial content placeholder
             ch_record = database.create_chapter(
                 novel_id=novel_id,
                 chapter_number=ch_num,
@@ -339,7 +322,6 @@ def generate_arc_blueprints(novel_id: str, arc: dict) -> list:
         return []
 
 def get_current_arc(novel_id: str, chapter_number: int) -> dict:
-    """Find which arc the chapter belongs to based on the stored Global Outline."""
     threads = database.get_narrative_threads(novel_id)
     outline_thread = next((t for t in threads if t["thread_name"] == "Global Outline"), None)
     if not outline_thread:
@@ -353,7 +335,6 @@ def get_current_arc(novel_id: str, chapter_number: int) -> dict:
     except Exception as e:
         print(f"[ERROR] Failed to load outline JSON: {e}")
         
-    # Default fallback arc definition
     return {
         "arc_number": 1,
         "title": "Default Arc",
@@ -362,8 +343,6 @@ def get_current_arc(novel_id: str, chapter_number: int) -> dict:
     }
 
 def write_next_chapter(novel_id: str) -> dict:
-    """Orchestrate the generation and database sync of the next chapter."""
-    # 1. Determine next chapter number by finding the first blueprint placeholder
     all_chapters = database.get_all_chapters(novel_id)
     next_ch_record = next((c for c in all_chapters if c["content"].startswith("BLUEPRINT:")), None)
     
@@ -377,15 +356,10 @@ def write_next_chapter(novel_id: str) -> dict:
         
     print(f"[INFO] Initiating writing process for Chapter {next_ch_number}...")
     
-    # 2. Get current arc and verify if chapter blueprints need to be generated
     current_arc = get_current_arc(novel_id, next_ch_number)
-    
-    # Fetch the chapter record for next_ch_number
     chapter_record = next((c for c in all_chapters if c["chapter_number"] == next_ch_number), None)
     
-    # If chapter record doesn't exist, we might have crossed into a new Arc
     if not chapter_record:
-        # Generate blueprints for the new arc
         generate_arc_blueprints(novel_id, current_arc)
         all_chapters = database.get_all_chapters(novel_id)
         chapter_record = next((c for c in all_chapters if c["chapter_number"] == next_ch_number), None)
@@ -395,10 +369,7 @@ def write_next_chapter(novel_id: str) -> dict:
         
     blueprint_text = chapter_record["content"]
     
-    # 3. Retrieve database entities for Context Injection
-    # A. Characters
     chars = database.get_characters(novel_id)
-    # Filter protagonist (assume first character is protagonist or name contains 'Jack'/'Protagonist')
     protagonist = next((c for c in chars if c.get("failure_flag") is not None), None)
     if not protagonist and chars:
         protagonist = chars[0]
@@ -409,22 +380,18 @@ def write_next_chapter(novel_id: str) -> dict:
     failure_flag = protagonist["failure_flag"] if protagonist else False
     last_breakthrough_ch = protagonist["last_breakthrough_chapter"] if protagonist else 0
     
-    # B. World Lore
     lores = database.get_world_lore(novel_id)
     world_lore_text = "\n".join([f"- {lore['keyword']}: {lore['description']}" for lore in lores])
     
-    # C. History Vector Search (Semantic RAG)
     query_embed = get_embedding(blueprint_text)
     semantic_history = database.search_episodes(novel_id, query_embed, limit=3)
     history_text = "\n".join([f"- Chapter {h['chapter_id']}: {h['event_summary']}" for h in semantic_history])
     
-    # D. Working Memory (Last 2 written chapters content)
     previous_chapters = [c for c in all_chapters if c["chapter_number"] < next_ch_number and not c["content"].startswith("BLUEPRINT:")]
     working_memory_text = ""
     for ch in previous_chapters[-2:]:
         working_memory_text += f"\n--- Chapter {ch['chapter_number']}: {ch['title']} ---\n{ch['content'][:800]}...\n"
         
-    # 4. Generate Chapter Content with Editor Review loop
     attempt = 0
     max_attempts = 3
     final_content = ""
@@ -458,7 +425,6 @@ def write_next_chapter(novel_id: str) -> dict:
         attempt += 1
         print(f"[INFO] Writing chapter draft (Attempt {attempt}/{max_attempts})...")
         
-        # Enforce length restriction at drafting phase
         draft_attempt = 0
         current_prompt = prompt
         final_content = ""
@@ -469,7 +435,7 @@ def write_next_chapter(novel_id: str) -> dict:
             print(f"[INFO] Generated draft length: {word_count} words.")
             ends_abruptly = not final_content.strip().endswith((".", "?", "!", '"', "”", "»", "*"))
             
-            if word_count >= 1800 and not ends_abruptly:
+            if word_count >= 1200 and not ends_abruptly:
                 break
                 
             if ends_abruptly:
@@ -490,7 +456,6 @@ def write_next_chapter(novel_id: str) -> dict:
                     f"4. TUYỆT ĐỐI không tóm tắt hay kết thúc chương truyện sớm khi chưa đủ độ dài yêu cầu."
                 )
             
-        # Editor Review
         review_prompt = prompts.REVIEW_PROMPT.format(
             chapter_number=next_ch_number,
             chapter_title=chapter_record["title"],
@@ -509,14 +474,11 @@ def write_next_chapter(novel_id: str) -> dict:
                 break
             else:
                 print(f"[WARNING] Review failed: {review.get('feedback')}. Re-writing...")
-                # Inject feedback into prompt for next try
                 prompt = prompt + f"\n\nPrevious Editor Feedback (MUST address this in rewrite): {review.get('feedback')}"
         except Exception as e:
             print(f"[WARNING] Failed to parse editor review: {e}. Skipping review loop.")
             break
             
-    # 5. Save written chapter to Supabase
-    # Update content of chapter_record (cleaning consecutive repetitions and header labels first)
     cleaned_content = clean_chapter_content(final_content)
     client = database.get_client()
     response = client.table("chapters")\
@@ -525,13 +487,11 @@ def write_next_chapter(novel_id: str) -> dict:
         .execute()
     updated_chapter = response.data[0] if response.data else {}
     
-    # 6. Post-writing Database Sync (Extract Entities & Update Story Bible)
     sync_story_bible(novel_id, updated_chapter, chars)  # type: ignore[arg-type]
     
     return updated_chapter  # type: ignore[return-value]
 
 def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
-    """Parse the written chapter to extract status updates and write them to Supabase."""
     print("[INFO] Syncing Story Bible and updating character stats...")
     
     prompt = prompts.EXTRACT_ENTITIES_PROMPT.format(
@@ -543,26 +503,21 @@ def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
     try:
         data = safe_loads(extract_json)
         
-        # 1. Update Character states (stats, failure flag, breakthrough)
         for char_up in data.get("character_updates", []):
             name = char_up["name"]
-            # Fetch existing to avoid wiping missing fields
             exist = database.get_character_by_name(novel_id, name)
             
-            # Decide if breakthrough resetting the failure_flag is needed
             new_failure_flag = char_up.get("failure_flag")
             if new_failure_flag is None:
                 new_failure_flag = exist.get("failure_flag", False) if exist else False
                 
             last_bt = exist.get("last_breakthrough_chapter", 0) if exist else 0
             
-            # If protagonist had a breakthrough, reset failure_flag and record chapter number
             if char_up.get("breakthrough_written"):
                 new_failure_flag = False
                 last_bt = chapter["chapter_number"]
                 print(f"[INFO] Protagonist breakthrough recorded in Chapter {last_bt}! Resetting failure_flag.")
                 
-            # Safely resolve schema fields to prevent null violations
             description = char_up.get("description") or (exist.get("description", "") if exist else "")
             power_tier = char_up.get("power_tier") or (exist.get("power_tier", "Ordinary") if exist else "Ordinary")
             combat_stats = char_up.get("combat_stats") or (exist.get("combat_stats", {}) if exist else {})
@@ -579,7 +534,6 @@ def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
                 last_breakthrough_chapter=last_bt
             )
             
-        # 2. Insert new world lores
         for lore in data.get("new_lore", []):
             database.upsert_world_lore(
                 novel_id=novel_id,
@@ -588,7 +542,6 @@ def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
             )
             print(f"[INFO] New lore added: {lore['keyword']}")
             
-        # 3. Insert new narrative threads
         for thread in data.get("new_threads", []):
             database.upsert_narrative_thread(
                 novel_id=novel_id,
@@ -598,8 +551,6 @@ def sync_story_bible(novel_id: str, chapter: dict, current_chars: list):
             )
             print(f"[INFO] New narrative thread added: {thread['thread_name']}")
             
-        # 4. Generate Episodic Summary and Embedding
-        # Create event list
         events_list = [c.get("event_summary", "") for c in data.get("character_updates", []) if c.get("event_summary")]
         chapter_events = " ".join(events_list) if events_list else f"Chapter {chapter['chapter_number']}: {chapter['title']}"
         
